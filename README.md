@@ -4,7 +4,7 @@ This project aims to predict the outcomes of NBA playoff series, including the w
 
 ## Usage
 
-To view the content of this project please refer to the `prediction_project.html` rendered output file.
+To view the content of this project please visit this [link](https://jordanh-49.github.io/nba_playoff_predictor).
 
 ## Packages
 
