@@ -1,0 +1,2394 @@
+---
+title: 'Data Science Project'
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    tree_depth: 3
+    smooth_scroll: false
+author: "Jordan Hilton"
+date: "`r format(Sys.Date(), '%m/%d/%y')`"
+---
+
+```{r set options, include=FALSE}
+# DO NOT CHANGE THE LINE BELOW 
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{css styling, echo=FALSE}
+<style>
+.tocify {
+max-width: 175px !important;
+}
+</style>
+
+<style>
+.main-container {
+width: 100%;
+max-width: 940px;
+margin-left: 0px;
+margin-right: auto;
+}
+</style>
+
+<style>
+.red-header {
+  color: red;
+}
+</style>
+
+```
+
+```{r logo, echo = FALSE}
+
+htmltools::img(src = 'https://cdn.nba.com/logos/nba/1610612760/primary/L/logo.svg',
+                height = '200',
+                alt = 'logo',
+                style = 'position: absolute; top: 0px; left: 500px;')
+```
+
+# Introduction
+
+The purpose of this project is to gauge your technical skills and problem solving ability by working through something similar to a real NBA data science project. You will work your way through this R Markdown document, answering questions as you go along. Please begin by adding your name to the "author" key in the YAML header. When you're finished with the document, come back and type your answers into the answer key at the top. Please leave all your work below and have your answers where indicated below as well. Please note that we will be reviewing your code so make it clear, concise and avoid long printouts. Feel free to add in as many new code chunks as you'd like.
+
+Remember that we will be grading the quality of your code and visuals alongside the correctness of your answers. Please try to use the tidyverse as much as possible (instead of base R and explicit loops). Please do not bring in any outside data.
+
+**Note:**
+
+**Throughout this document, any `season` column represents the year each season started. For example, the 2015-16 season will be in the data set as 2015. For most of the rest of the project, we will refer to a season by just this number (e.g. 2015) instead of the full text (e.g. 2015-16).**
+
+<h1 class="red-header">
+
+Answers
+
+</h1>
+
+## Part 1
+
+**Question 1:**
+
+-   Offensive: 56.3% eFG\
+-   Defensive: 47.9% eFG
+
+**Question 2:** 81.6%
+
+**Question 3:** 46.2%
+
+**Question 4:** This is a written question. Please leave your response in the document under Question 5.
+
+**Question 5:** 78.9% of games
+
+**Question 6:**
+
+-   Round 1: 84.7%\
+-   Round 2: 63.9%\
+-   Conference Finals: 55.6%\
+-   Finals: 77.8%
+
+**Question 7:**
+
+-   Percent of +5.0 net rating teams making the 2nd round next year: 63.6%\
+-   Percent of top 5 minutes played players who played in those 2nd round series: 37.8%
+
+## Part 2
+
+Please show your work in the document, you don't need anything here.
+
+## Part 3
+
+Please write your response in the document, you don't need anything here.
+
+# Setup & Data
+
+```{r load data, message = F, warning = F}
+## Function to install and load packages
+install_and_load <- function(package_names) {
+  # Check which packages are not installed
+  new_packages <- package_names[!(package_names %in% installed.packages()[, "Package"])]
+  
+  # Install new packages
+  if(length(new_packages)) {
+    install.packages(new_packages)
+  }
+  
+  # Load all packages
+  sapply(package_names, require, character.only = TRUE)
+}
+
+# Load in packages
+packages <- c("tidyverse", "tidymodels", "ggplot2", "RcppRoll", "vip", "doParallel",
+              "xgboost","lme4", "finetune", "PlayerRatings", "gt","gtExtras")
+
+install_and_load(packages)
+
+# Import relevant csv data
+player_data <- read_csv("data/player_game_data.csv", show_col_types = FALSE)
+team_data <- read_csv("data/team_game_data.csv", show_col_types = FALSE)
+
+```
+
+## Part 1 -- Data Cleaning
+
+In this section, you're going to work to answer questions using data from both team and player stats. All provided stats are on the game level.
+
+### Question 1
+
+**QUESTION:** What was the Warriors' Team offensive and defensive eFG% in the 2015-16 regular season? Remember that this is in the data as the 2015 season.
+
+```{r}
+# Get an understanding of general df structure of team_data
+glimpse(team_data)
+
+```
+
+```{r}
+# Calculate eFG% -> eFG = ((FGM + (0.5 * 3PM)) / FGA
+q1_efg_pct <- 
+  # Offensive eFG%
+  team_data %>%
+  filter(season == 2015 & off_team == 'GSW' & gametype == 2) %>% # filters for off team
+  group_by(off_team) %>%
+  summarise(
+    off_efg_pct = (sum(fgmade) + (0.5 * sum(fg3made))) / sum(fgattempted) * 100
+  ) %>%
+  ungroup() %>%
+  # Defensive eFG%
+  inner_join (
+    team_data %>%
+    filter(season == 2015 & def_team == 'GSW' & gametype == 2) %>% # filters for def team
+    group_by(def_team) %>%
+    summarise(
+      def_efg_pct = (sum(fgmade) + (0.5 * sum(fg3made))) / sum(fgattempted) * 100
+    ) %>%
+    ungroup(),
+    by = c("off_team" = "def_team")
+  ) 
+
+# Output both values to 1.d.p
+cat(
+  "Offensive:", q1_efg_pct %>% pull(off_efg_pct) %>% round(1) %>% paste0("% eFG"), 
+  "\nDefensive:", q1_efg_pct %>% pull(def_efg_pct) %>% round(1) %>% paste0("% eFG")
+  )
+
+```
+
+
+[**ANSWER 1:**]{style="color:red"}
+
+Offensive: 56.3% eFG\
+Defensive: 47.9% eFG
+
+### Question 2
+
+**QUESTION:** What percent of the time does the team with the higher eFG% in a given game win that game? Use games from the 2014-2023 regular seasons. If the two teams have an exactly equal eFG%, remove that game from the calculation.
+
+```{r}
+# Step 1 : Get all regular season games from 2014 to 2023
+q2_team_data <- team_data %>%
+  filter(season >= 2014 & season <= 2023 & gametype == 2)
+
+# Step 2: Calculate eFG% for each team in each game as per Q1
+q2_team_data_pg <- q2_team_data %>%
+  rename(team_name = 'off_team',
+         is_win = 'off_win') %>%
+  group_by(nbagameid, team_name, is_win) %>%
+  summarise(
+    efg_pct = (sum(fgmade) + 0.5 * sum(fg3made)) / sum(fgattempted) * 100,
+    .groups = 'drop'
+  ) %>%
+  ungroup()
+  
+# Step 3: Filter out games where the eFG% for both teams are equal
+q2_team_data_pg_filtered <- q2_team_data_pg %>%
+  select(nbagameid, team_name, is_win, efg_pct) %>% # select relevant cols
+  group_by(nbagameid) %>%
+  filter(n() == 2) %>% # ensure 2 rows per game
+  filter(length(unique(efg_pct)) > 1) %>% # filter out games with equal eFG%
+  ungroup()
+
+# Step 3: Determine the % of games when team with the higher eFG% won the game
+q2_efg_win_data <- q2_team_data_pg_filtered %>%
+  group_by(nbagameid) %>%
+  # add the higher eFG% value per match
+  reframe(
+    team_name,
+    is_win,
+    efg_pct,
+    max_efg_pct = max(efg_pct)
+    ) %>%
+  group_by(nbagameid) %>%
+  # keep only matches where team had the higher eFG%
+  filter(efg_pct == max_efg_pct) %>%
+  ungroup() %>%
+  summarise(
+    total_games = n(),
+    wins_by_higher_efg = sum(is_win == 1),
+  ) %>%
+  summarise(proportion = wins_by_higher_efg/total_games * 100)
+
+# Output value to 1.d.p
+cat(
+  q2_efg_win_data %>% pull(proportion) %>% round(1), 
+  "% of games were won by the team who had the higher eFG%."
+  )
+
+
+```
+
+[**ANSWER 2:**]{style="color:red"}
+
+81.6%
+
+### Question 3
+
+**QUESTION:** What percent of the time does the team with more offensive rebounds in a given game win that game? Use games from the 2014-2023 regular seasons. If the two teams have an exactly equal number of offensive rebounds, remove that game from the calculation.
+
+```{r}
+
+# Step 1a: Reuse q2_team_data from Q2
+q3_team_data <- q2_team_data
+
+# Step 1b: Filter out games where the off rebounds for both teams are equal
+q3_team_data <- q3_team_data %>%
+  select(nbagameid, off_team, off_win, reboffensive) %>%
+  rename("is_win" = off_win) %>%
+  group_by(nbagameid) %>%
+  filter(n() == 2) %>%
+  filter(length(unique(reboffensive)) > 1) %>%
+  mutate(max_off_reb = max(reboffensive)) %>%
+  ungroup()
+  
+# Step 2: Determine the % of games won by team with the higher off reb count
+q3_offreb_win_data <- q3_team_data %>%
+  group_by(nbagameid) %>%
+  # keep data for team that had the higher off reb count
+  filter(reboffensive == max_off_reb) %>%
+  ungroup() %>%
+  summarise(
+    total_games = n(),
+    wins_by_higher_offreb = sum(is_win == 1),
+  ) %>%
+  summarise(proportion = wins_by_higher_offreb/total_games * 100)
+
+# Output value to 1.d.p
+cat(
+  q3_offreb_win_data %>% pull(proportion) %>% round(1) %>% paste0("%"), 
+  "of games were won by the team who had more Offensive rebounds."
+  )
+
+```
+
+[**ANSWER 3:**]{style="color:red"}
+
+46.2%
+
+### Question 4
+
+**QUESTION:** Do you have any theories as to why the answer to question 3 is lower than the answer to question 2? Try to be clear and concise with your answer.
+
+[**ANSWER 4:**]{style="color:red"}
+
+We can expect the proportion of games won by teams who had a higher eFG% than their opponents across the 2014-2023 regular seasons to be higher than the proportion of games won by teams who had a higher offensive rebound count.
+
+First we should define eFG% which is a direct measurement of team's shooting efficiency accounting for the value of three-pointers. 
+
+Teams that have higher eFG%, shoot the ball more efficiently which means they will have a higher point per possession value. Whereas, teams that shoot less efficiently will have a lower eFG%. This is important as teams that have lower eFG% will miss more shots than a team with higher eFG% and as a result have a higher number of 'chances' to grab offensive rebounds.
+
+Intuition tells us that a team that scores less efficiently could have more offensive rebounds but will have a lower points per possession (PPP) value than a team that scores more efficiently and has a higher PPP value. By maximising PPP, we can then assume that a team who has a higher eFG% than their opponents will be capable of winning a higher proportion of games than a team that wins the offensive rebounding battle (as long as the sample size of games is great enough).
+
+### Question 5
+
+**QUESTION:** Look at players who played at least 25% of their possible games in a season and scored at least 25 points per game played. Of those player-seasons, what percent of games were they available for on average? Use games from the 2014-2023 regular seasons.
+
+For example:
+
+-   Ja Morant does not count in the 2023-24 season, as he played just 9 out of 82 games this year, even though he scored 25.1 points per game.\
+-   Chet Holmgren does not count in the 2023-24 season, as he played all 82 games this year but scored 16.5 points per game.\
+-   LeBron James does count in the 2023-24 season, as he played 71 games and scored 25.7 points per game.
+
+```{r}
+# Get an understanding of general df structure of player_data
+glimpse(player_data)
+
+```
+
+```{r}
+# Get all player data from 2014-2023 regular season games
+q5_player_data <- player_data %>%
+  filter(season >= 2014 & season <= 2023 & gametype == 2)
+
+# Get the avg # of players who scored 25ppg and played at least 25% of games across all seasons
+q5_25ppg_25_pct_players <- q5_player_data %>%
+  group_by(nbapersonid, player_name, season) %>%
+  summarise (
+    # total games played
+    gp = n(), 
+    # points per game
+    ppg = sum(points)/gp, 
+    # 25% of games played in a season of 82 games
+    gp_25_pct = 82*0.25, 
+    # flag for if a player played at least 25% of total games
+    has_played_25_pct = ifelse(gp > gp_25_pct, TRUE, FALSE), 
+    .groups = 'drop'
+  ) %>%
+  # filter for 25 ppg scorers who played at least 25% of total games
+  filter(ppg >= 25.0 & has_played_25_pct == TRUE) %>% 
+  arrange(nbapersonid, player_name, season) %>% # sort by player and season
+  summarise(avg_gp = mean(gp)) # calculate avg
+  
+  
+# Output value
+cat(
+  "Of the players who scored at least 25 ppg and played at least 25% of their possible games in season, they were available for", 
+  q5_25ppg_25_pct_players %>% pull(avg_gp) %>% round(1), 
+  "% of games on average."
+  )
+  
+```
+
+[**ANSWER 5:**]{style="color:red"}
+
+78.9% of games
+
+### Question 6
+
+**QUESTION:** What % of playoff series are won by the team with home court advantage? Give your answer by round. Use playoffs series from the 2014-**2022** seasons. Remember that the 2023 playoffs took place during the 2022 season (i.e. 2022-23 season).
+
+```{r}
+# Step 1: Get all team data from 2014-2022 playoff games
+q6_team_data <- team_data %>%
+  filter(season >= 2014 & season <= 2022 & gametype == 4) %>%
+  arrange(season,gamedate, nbagameid) %>%
+  select(season:def_win)
+
+# Step 2: Transform into series data identifying round name, team with home adv and series winner
+q6_series_data <- q6_team_data %>%
+  # add a unique identifier for a series
+  mutate(
+    series_id = paste(season, offensivenbateamid, defensivenbateamid, sep = "-")
+  ) %>%
+  group_by(series_id) %>%
+  # add in win count by team, a flag for series outcome and series end
+  reframe(
+    season,
+    nbagameid,
+    offensivenbateamid,
+    off_team,
+    def_team,
+    is_home = off_home,
+    game_number = row_number(),
+    win_count_off = cumsum(off_win),
+    win_count_def = cumsum(def_win),
+    series_outcome = paste0(win_count_off, "-", win_count_def),
+    series_end = ifelse(win_count_off == 4 | win_count_def == 4, 1, 0)
+  ) %>%
+  # get only 1 team per game id
+  group_by(nbagameid) %>%
+  arrange(offensivenbateamid) %>%
+  filter(min_rank(offensivenbateamid) == 1) %>%
+  ungroup() %>%
+  # add in a cumulative value for series end
+  arrange(nbagameid) %>%
+  group_by(season) %>%
+  mutate(cum_series_end = cumsum(series_end)) %>%
+  ungroup() %>%
+  group_by(series_id) %>%
+  # add in round name based on cumulative series end
+  mutate(
+    round_name = case_when(
+    max(cum_series_end) <= 8 ~ "Round 1",
+    max(cum_series_end) > 8 & max(cum_series_end) <= 12 ~ "Round 2",
+    max(cum_series_end) > 12 & max(cum_series_end) <= 14 ~ "Conference Finals",
+    max(cum_series_end) == 15 ~ "Finals",
+    TRUE ~ NA_character_)
+  ) %>%
+  ungroup() %>%
+  group_by(series_id) %>%
+  # add in team who had home adv and who won the series by row
+  mutate(
+    team_w_home_ad = first(case_when(
+      game_number == 1 & is_home == 1 ~ off_team,
+      game_number == 1 & is_home == 0 ~ def_team,
+      TRUE ~ NA_character_
+    )),
+    team_series_won = last(case_when(
+      win_count_off == 4  ~ off_team,
+      win_count_def == 4 ~ def_team,
+      TRUE ~ NA_character_
+    ))
+  ) %>%
+  ungroup()
+
+# Ordered playoff rounds
+playoff_rnd_order <- c('Round 1', 'Round 2', 'Conference Finals', 'Finals')
+
+# Get % of playoff series won by the team with home court advantage
+q6_series_win_data <- q6_series_data %>%
+  filter(series_end == 1) %>%
+  mutate(round_name = factor(round_name, levels = playoff_rnd_order)) %>%
+  group_by(round_name) %>%
+  summarise(
+    home_ad_series_wins = sum(ifelse(team_w_home_ad == team_series_won,1,0)),
+    total_series = n(),
+    pct_won_home_ad = home_ad_series_wins/total_series * 100
+  ) %>%
+  arrange(round_name)
+
+cat(
+  "Round 1:", q6_series_win_data %>%  pull(pct_won_home_ad) %>% .[1] %>% round(1) %>% paste0("%"),
+  "\nRound 2:", q6_series_win_data %>%  pull(pct_won_home_ad) %>% .[2] %>% round(1) %>% paste0("%"),
+  "\nConference Finals:", q6_series_win_data %>%  pull(pct_won_home_ad) %>% .[3] %>% round(1) %>% paste0("%"),
+  "\nFinals:", q6_series_win_data %>%  pull(pct_won_home_ad) %>% .[4] %>% round(1) %>% paste0("%")
+)
+```
+
+[**ANSWER 6:**]{style="color:red"}
+
+Round 1: 84.7%\
+Round 2: 63.9%\
+Conference Finals: 55.6%\
+Finals: 77.8%
+
+### Question 7
+
+**QUESTION:** Among teams that had at least a +5.0 net rating in the regular season, what percent of them made the second round of the playoffs the **following** year? Among those teams, what percent of their top 5 total minutes played players (regular season) in the +5.0 net rating season played in that 2nd round playoffs series? Use the 2014-2021 regular seasons to determine the +5 teams and the 2015-2022 seasons of playoffs data.
+
+For example, the Thunder had a better than +5 net rating in the 2023 season. If we make the 2nd round of the playoffs **next** season (2024-25), we would qualify for this question. Our top 5 minutes played players this season were Shai Gilgeous-Alexander, Chet Holmgren, Luguentz Dort, Jalen Williams, and Josh Giddey. If three of them play in a hypothetical 2nd round series next season, it would count as 3/5 for this question.
+
+*Hint: The definition for net rating is in the data dictionary.*
+
+```{r}
+# Question 7a
+# Get Regular season teams that had >= +5 rating by season
+## Step 1: Get team data correctly sorted and filter for only 2014-2021 regular seasons games
+q7_team_data_reg <- team_data %>%
+  filter(season >= 2014 & season <= 2021 & gametype == 2) %>%
+  arrange(season, gamedate, nbagameid)
+
+## Step 2: Get the >5 net rating teams by season
+q7_team_ratings <- q7_team_data_reg %>%
+  # Offensive ratings
+  select(season, gamedate, nbagameid, off_team, offensivenbateamid, points, possessions) %>%
+  group_by(season, offensivenbateamid, off_team) %>%
+  reframe(
+    ortg = sum(points)/(sum(possessions)/100),
+    .groups = 'drop'
+  ) %>%
+  rename(
+    team_name = 'off_team',
+    nba_team_id = 'offensivenbateamid'
+  ) %>%
+  # Defensive ratings
+  inner_join(
+    q7_team_data_reg %>%
+      select(season, gamedate, nbagameid, def_team, defensivenbateamid, points, possessions) %>%
+      group_by(season, defensivenbateamid, def_team) %>%
+      summarise(
+        drtg = sum(points)/(sum(possessions)/100),
+        .groups = 'drop'
+      ) %>%
+      ungroup() %>%
+      rename(
+        team_name = 'def_team',
+        nba_team_id = 'defensivenbateamid'
+      ),
+    by = c("season", "team_name", "nba_team_id")
+  ) %>%
+  mutate(
+    net_rt = ortg - drtg
+  ) %>%
+  filter(net_rt >= 5) %>%
+  select(season, nba_team_id)
+    
+# Get the teams that made second round of playoffs by season
+## Step 1: Get team data for 2015-2022 playoff games
+q7_team_data_playoffs <- team_data %>%
+  filter(season >= 2015 & season <= 2022 & gametype == 4) %>%
+  arrange(season, gamedate, nbagameid)
+
+## Step 2: Get the teams by season that made second round of playoffs
+q7_teams_in_second_rnd <- q7_team_data_playoffs %>%
+  # add a unique identifier for a series
+  mutate(
+    series_id = paste(season, offensivenbateamid, defensivenbateamid, sep = "-")
+  ) %>%
+  group_by(series_id) %>%
+  # add in win count by team, a flag for series outcome and series end
+  reframe(
+    season,
+    nbagameid,
+    offensivenbateamid,
+    defensivenbateamid,
+    off_team,
+    def_team,
+    is_home = off_home,
+    game_number = row_number(),
+    win_count_off = cumsum(off_win),
+    win_count_def = cumsum(def_win),
+    series_end = ifelse(win_count_off == 4 | win_count_def == 4, 1, 0)
+  ) %>%
+  # get only 1 team per game id
+  group_by(nbagameid) %>%
+  arrange(offensivenbateamid) %>%
+  filter(min_rank(offensivenbateamid) == 1) %>%
+  ungroup() %>%
+  # add in a cumulative value for series end
+  arrange(nbagameid) %>%
+  group_by(season) %>%
+  mutate(cum_series_end = cumsum(series_end)) %>%
+  ungroup() %>%
+  group_by(series_id) %>%
+  # add in round name based on cumulative series end
+  mutate(
+    round_name = case_when(
+    max(cum_series_end) <= 8 ~ "Round 1",
+    max(cum_series_end) > 8 & max(cum_series_end) <= 12 ~ "Round 2",
+    max(cum_series_end) > 12 & max(cum_series_end) <= 14 ~ "Conference Finals",
+    max(cum_series_end) == 15 ~ "Finals",
+    TRUE ~ NA_character_)
+  ) %>%
+  ungroup() %>%
+  # filter for Round 2 games only
+  filter(round_name == 'Round 2') %>%
+  select(season, offensivenbateamid,defensivenbateamid) %>%
+  group_by(season) %>%
+  # get list of unique nba team ids
+  summarise(nba_team_id = list(unique(c(offensivenbateamid, defensivenbateamid)))) %>%
+  ungroup() %>%
+  # unnest team ids
+  unnest(nba_team_id)
+
+# Get % of +5 rating regular season teams that made 2nd round of playoffs in following year
+## Step 1: Reuse +5 net rating teams in season prior
+# q7_team_ratings
+
+## Step 2: Get total number of teams that had +5 net rating in season prior
+q7_num_teams_rating <- nrow(q7_team_ratings)
+
+## Step 3: Proportion of teams with +5 net rating that go on to second round of playoffs
+q7_num_teams_rating_round2 <- q7_team_ratings %>%
+  mutate(season = season + 1) %>% # Adjust the season in the team ratings to match following season
+  merge(q7_teams_in_second_rnd, by = c("season", "nba_team_id")) # Merge on season and team_id
+
+cat(
+  round(nrow(q7_num_teams_rating_round2) / q7_num_teams_rating*100,1), 
+  "% of teams who had at least a +5 net rating in the regular season made it to the second round of playoffs in the following season."
+  )
+  
+```
+
+```{r}
+# Question 7b
+# Get the players that were on the +5 teams teams that made second of playoffs
+## Step 1: Reuse the teams that had +5 net regular season rating in season prior
+# q7_team_ratings
+
+## Step 2: Get the players from the teams that had a +5 net regular season rating
+q7_players_on_plus_five_teams <- player_data %>%
+  filter(season >= 2014 & season <= 2021 & gametype == 2) %>%
+  arrange(season, gamedate, nbagameid) %>%
+  left_join(q7_team_ratings, by = c("season", "nbateamid" = "nba_team_id")) %>%
+  select(season, nbapersonid, player_name, nbateamid, team, seconds)
+  
+## Step 3: Get the top 5 players in minutes played by team by season
+q7_top_five_players_on_plus_five_teams <- q7_players_on_plus_five_teams %>%
+  group_by(season, nbapersonid, player_name, nbateamid, team) %>%
+  summarise(total_minutes_played = sum(seconds)/60, .groups = 'drop') %>%
+  ungroup() %>%
+  group_by(season, nbateamid, team) %>%
+  arrange(desc(total_minutes_played)) %>%
+  slice_head(n = 5) %>%
+  reframe(nbapersonid = nbapersonid)
+  
+## Step 4: Reuse the teams by season that made second round of playoffs
+glimpse(q7_teams_in_second_rnd)
+
+## Step 5: Get the players that were on the teams that made second of playoffs
+q7_players_playoffs <- player_data %>%
+  filter(season >= 2015 & season <= 2022 & gametype == 4) %>%
+  arrange(season, gamedate, nbagameid) %>%
+  distinct(season, nbateamid, nbapersonid) %>%
+  left_join(q7_teams_in_second_rnd, by = c("season", "nbateamid" = "nba_team_id")) %>%
+  select(season, nbateamid, nbapersonid)
+   
+# Find by season by team, the # of players from top 5 mp actually played in following season of playoffs
+## Step 1: Increment the season in q7_top_five_players_on_plus_five_teams by 1
+q7_top_five_players_next_season <- q7_top_five_players_on_plus_five_teams %>%
+  select(-team) %>%
+  mutate(season = season + 1)
+
+## Step 2: Join q7_top_five_players_next_season with q7_players_playoffs
+q7_players_in_playoffs <- q7_top_five_players_next_season %>%
+  inner_join(q7_players_playoffs, by = c("season", "nbateamid", "nbapersonid"))
+
+## Step 3: Join the resulting df back to q7_top_five_players_next_season
+q7_top_five_players_with_flag <- q7_top_five_players_next_season %>%
+  left_join(q7_players_in_playoffs %>% 
+              select(season, nbateamid, nbapersonid) %>% 
+              mutate(in_playoffs = TRUE), 
+            by = c("season", "nbateamid", "nbapersonid")) %>%
+  mutate(in_playoffs = if_else(is.na(in_playoffs), FALSE, TRUE))
+
+## Step 4: Calculate the % of top 5 players who played in the second round of playoffs by team by season
+q7_proportion_top5_playoffs <- q7_top_five_players_with_flag %>%
+  summarise(
+    total_top5_players = n(),
+    top5_in_playoffs = sum(in_playoffs)
+  ) %>%
+  summarise(proportion_in_playoffs = top5_in_playoffs / total_top5_players * 100)
+
+cat(
+  "Among those teams,", 
+  q7_proportion_top5_playoffs %>% pull(proportion_in_playoffs) %>% round(1) %>% paste0("%"),
+  "of their top 5 total minutes played players (regular season) in the +5.0 net rating season played in that 2nd round playoffs series."
+  )
+
+
+```
+
+```{r}
+cat(
+  "Percent of +5.0 net rating teams making the 2nd round next year:",
+  round(nrow(q7_num_teams_rating_round2) / q7_num_teams_rating*100,1) %>% paste0("%"),
+  "\nPercent of top 5 minutes played players who played in those 2nd round series:",
+  q7_proportion_top5_playoffs %>% pull(proportion_in_playoffs) %>% round(1) %>% paste0("%")
+  )
+```
+
+[**ANSWER 7:**]{style="color:red"}
+
+Percent of +5.0 net rating teams making the 2nd round next year: 63.6%\
+Percent of top 5 minutes played players who played in those 2nd round series: 37.8%
+
+## Part 2 -- Playoffs Series Modeling
+
+For this part, you will work to fit a model that predicts the winner and the number of games in a playoffs series between any given two teams.
+
+This is an intentionally open ended question, and there are multiple approaches you could take. Here are a few notes and specifications:
+
+1.  Your final output must include the probability of each team winning the series. For example: “Team A has a 30% chance to win and team B has a 70% chance.” instead of “Team B will win.” You must also predict the number of games in the series. This can be probabilistic or a point estimate.
+
+2.  You may use any data provided in this project, but please do not bring in any external sources of data.
+
+3.  You can only use data available prior to the start of the series. For example, you can’t use a team’s stats from the 2016-17 season to predict a playoffs series from the 2015-16 season.
+
+4.  The best models are explainable and lead to actionable insights around team and roster construction. We're more interested in your thought process and critical thinking than we are in specific modeling techniques. Using smart features is more important than using fancy mathematical machinery.
+
+5.  Include, as part of your answer:
+
+-   A brief written overview of how your model works, targeted towards a decision maker in the front office without a strong statistical background.\
+-   What you view as the strengths and weaknesses of your model.\
+-   How you'd address the weaknesses if you had more time and/or more data.\
+-   Apply your model to the 2024 NBA playoffs (2023 season) and create a high quality visual (a table, a plot, or a plotly) showing the 16 teams' (that made the first round) chances of advancing to each round.
+
+### Model Overview
+
+#### Introduction
+
+To predict the outcome of a series between two teams in the NBA Playoffs (2023-2024 season), you can approach this problem either at a game or series level which have different strengths and weaknesses in their approach.
+
+I have chosen to build a model on the game-level using a powerful model called XGBoost to predict each game of a 7-game series in order to predict the outcome of a series between any two playoff teams in a given playoff round from the 2024 playoffs.
+
+This model uses certain inputs including box score statistics that take a player and/or teams averages over the past 5 games throughout the regular season (known as rolling averages), as well as indicators of fatigue and momentum such as days since last played and days until next game. I have also incorporated team ratings that assesses the strength (both defensive and offensive) of a team accounting for variations and fluctuations between- and within-seasons.
+
+By using these inputs, a user can predict the outcome of a NBA playoff series from the 2023-24 season and can also look at the most likely path that a team would take in the playoffs including advancements and eliminations.
+
+#### Strengths & Weaknesses
+By taking a game-level approach, the model can only predict a playoff series as the sum of the individual games within that series. Predicting at the game level has a distinct advantage over predicting at the series level as it allows us to account for the impact of chance and other related factors to occur across the 7 games as players and team can and do under/over perform. However, by taking this approach the model is not capturing season-level specific-metrics such as league standings, home and away season records directly that might help predict the outcome of a playoff series in one season.
+
+Additionally, this model assumes that each game in a given series are independent (not the same and are unrelated). This would normally be disadvantageous as intuition tells us that in a 7 game series momentum matters and that teams who go up 3-0 have never lost a series. However, by assuming series games are independent, this allows the model to be abstracted beyond the 2023-24 NBA playoffs- i.e. the model can be used to predict games or series given updated game data from both the past and in the future.
+
+The last caveat of using this model is that the skill rating model used to calculate team strength was not directly optimised and therefore may bias dominant teams where the natural decay in rating when teams lose may not occur as quickly for teams who have won in previous seasons and then had large reductions in team performance the next.
+
+#### Addressing Weaknesses
+To address these weaknesses the following could be implemented given more time and/or data:
+-   Tuning the parameters for the team strength model (as it is the strongest predictor of game outcome in our model).
+-   Adding in a specific seasonal component prior so that rolling averages are computer within-season rather than between games across     seasons and league/home/away records.
+-   Greater exploration into metrics relating to player and team health given its impact on the 2023-24 NBA playoffs thus far       
+    accounting for players who not only don't play but are injured.
+-   Exploring different combinations or ensemble models for game outcomes.
+-   If given more data, building a series-level predictor model using a greater sample of historical playoff series outcomes.
+
+### Functions & Helpers
+
+```{r}
+# Helper functions ---------------------------
+
+# Function to count games in the last n days
+count_games_last_n_days <- function(dates, n_days) {
+  sapply(1:length(dates), function(i) {
+    if (i == 1) {
+      NA
+    } else {
+      sum(dates[i] - dates[1:(i-1)] <= n_days)
+    }
+  })
+}
+
+# Function to create playoff bracket including 1st Round pre-fill and blank entries for rest of playoffs
+create_round_bracket <- function(initial_matchups, round_name, playoff_team_seed) {
+  round_num <- round_name
+  # Helper function to expand series into games based on home advantage pattern
+  expand_series <- function(h_team, a_team, conf_name, round_num) {
+    # Define the home team pattern based on the game number
+    home_pattern <- c(h_team, h_team, a_team, a_team, h_team, a_team, h_team)
+    away_pattern <- c(a_team, a_team, h_team, h_team, a_team, h_team, a_team)
+    tibble(
+      conference = ifelse(round_num == 4, "Both", conf_name),
+      round_number = round_num,
+      round_name = c("Round 1", "Round 2", "Conference Finals", "Finals")[round_num],
+      game_number = 1:7,
+      h_team = home_pattern,
+      a_team = away_pattern
+    )
+  }
+  
+  # Mapping round names to numbers
+  round_map <- c("Round 1" = 1, "Round 2" = 2, "Conference Finals" = 3, "Finals" = 4)
+  round_num <- round_map[[round_name]]
+  
+  # Generate the data frame for the specified round from the initial match ups
+  round_bracket <- bind_rows(
+    lapply(names(initial_matchups), function(conf_name) {
+      bind_rows(
+        lapply(names(initial_matchups[[conf_name]]), function(h_team) {
+          a_team <- initial_matchups[[conf_name]][[h_team]]
+          expand_series(h_team, a_team, conf_name, round_num)
+        })
+      )
+    })
+  )
+  
+  if (round_name == 4) {
+    round_bracket <- round_bracket %>%
+      mutate(
+        season = 2023,
+        nbagameid = row_number(),
+        gamedate = as.Date('2024-12-31')
+      ) %>%
+      left_join(
+        playoff_team_seed %>% select(team_name,league_seed),
+        by = c("h_team" = "team_name")
+      ) %>%
+      rename("h_seed" = "league_seed") %>%
+      left_join(
+        playoff_team_seed %>% select(team_name,league_seed),
+        by = c("a_team" = "team_name")
+      ) %>%
+      rename("a_seed" = "league_seed")
+    
+  } else {
+    round_bracket <- round_bracket %>%
+      mutate(
+        season = 2023,
+        nbagameid = row_number(),
+        gamedate = as.Date('2024-12-31')
+      ) %>%
+      left_join(
+        playoff_team_seed,
+        by = c("h_team" = "team_name")
+      ) %>%
+      rename("h_seed" = "seed") %>%
+      left_join(
+        playoff_team_seed,
+        by = c("a_team" = "team_name")
+      ) %>%
+      rename("a_seed" = "seed")
+  }
+  
+  return(round_bracket)
+}
+
+# Function to get features for current bracket
+bracket_with_features <- function(bracket, most_recent_ratings,most_recent_rolling_features,most_recent_player_features) {
+  bracket_features <- bracket %>%
+    inner_join(
+      most_recent_ratings,
+      by = c("h_team" = "team")
+    ) %>%
+    rename("h_rating" = rating) %>%
+    inner_join(
+      most_recent_ratings,
+      by = c("a_team" = "team")
+    ) %>%
+    rename("a_rating" = rating) %>%
+    inner_join(
+      most_recent_rolling_features,
+      by = c("h_team" = "team")
+    ) %>%
+    rename_with(~ paste0("h_", .), fg2made:ft_rate) %>%
+    inner_join(
+      most_recent_rolling_features,
+      by = c("a_team" = "team")
+    ) %>%
+    rename_with(~ paste0("a_", .), fg2made:ft_rate) %>%
+    inner_join(
+      most_recent_player_features,
+      by = c("h_team" = "team")
+    ) %>%
+    rename_with(~ paste0("h_", .), mean_oreb_pct:cumulative_unique_lineups) %>%
+    inner_join(
+      most_recent_player_features,
+      by = c("a_team" = "team")
+    ) %>%
+    rename_with(~ paste0("a_", .), mean_oreb_pct:cumulative_unique_lineups) %>%
+    mutate(
+      diff_rating = h_rating - a_rating,
+      diff_fg2made = h_fg2made - a_fg2made,
+      diff_fg2missed = h_fg2missed - a_fg2missed,
+      diff_fg2attempted = h_fg2attempted - a_fg2attempted,
+      diff_fg3made = h_fg3made - a_fg3made,
+      diff_fg3missed = h_fg3missed - a_fg3missed,
+      diff_fg3attempted = h_fg3attempted - a_fg3attempted,
+      diff_fgmade = h_fgmade - a_fgmade,
+      diff_fgmissed = h_fgmissed - a_fgmissed,
+      diff_fgattempted = h_fgattempted - a_fgattempted,
+      diff_ftmade = h_ftmade - a_ftmade,
+      diff_ftmissed = h_ftmissed - a_ftmissed,
+      diff_ftattempted = h_ftattempted - a_ftattempted,
+      diff_reboffensive = h_reboffensive - a_reboffensive,
+      diff_rebdefensive = h_rebdefensive - a_rebdefensive,
+      diff_reboundchance = h_reboundchance - a_reboundchance,
+      diff_assists = h_assists - a_assists,
+      diff_stealsagainst = h_stealsagainst - a_stealsagainst,
+      diff_turnovers = h_turnovers - a_turnovers,
+      diff_blocksagainst = h_blocksagainst - a_blocksagainst,
+      diff_defensivefouls = h_defensivefouls - a_defensivefouls,
+      diff_offensivefouls = h_offensivefouls - a_offensivefouls,
+      diff_shootingfoulsdrawn = h_shootingfoulsdrawn - a_shootingfoulsdrawn,
+      diff_possessions = h_possessions - a_possessions,
+      diff_points = h_points - a_points,
+      diff_shotattempts = h_shotattempts - a_shotattempts,
+      diff_andones = h_andones - a_andones,
+      diff_shotattemptpoints = h_shotattemptpoints - a_shotattemptpoints,
+      diff_ppa = h_ppa - a_ppa,
+      diff_ppp = h_ppp - a_ppp,
+      diff_tov_pct = h_tov_pct - a_tov_pct,
+      diff_blk_pct = h_blk_pct - a_blk_pct,
+      diff_ortg = h_ortg - a_ortg,
+      diff_drtg = h_drtg - a_drtg,
+      diff_ntrg = h_ntrg - a_ntrg,
+      diff_efg_pct = h_efg_pct - a_efg_pct,
+      diff_ts_pct = h_ts_pct - a_ts_pct,
+      diff_ft_rate = h_ft_rate - a_ft_rate,
+      diff_mean_oreb_pct = h_mean_oreb_pct - a_mean_oreb_pct,
+      diff_mean_dreb_pct = h_mean_dreb_pct - a_mean_dreb_pct,
+      diff_mean_tov_pct = h_mean_tov_pct - a_mean_tov_pct,
+      diff_mean_stl_pct = h_mean_stl_pct - a_mean_stl_pct,
+      diff_mean_blk_pct = h_mean_blk_pct - a_mean_blk_pct,
+      diff_mean_usg_pct = h_mean_usg_pct - a_mean_usg_pct,
+      diff_mean_ast_pct = h_mean_ast_pct - a_mean_ast_pct,
+      diff_max_usg_pct = h_max_usg_pct - a_max_usg_pct,
+      diff_avg_mp_starter = h_avg_mp_starter - a_avg_mp_starter,
+      diff_avg_mp_bench = h_avg_mp_bench - a_avg_mp_bench,
+      diff_pnts_by_starters = h_pnts_by_starters - a_pnts_by_starters,
+      diff_pnts_by_bench = h_pnts_by_bench - a_pnts_by_bench,
+      diff_sharp_shooters = h_sharp_shooters - a_sharp_shooters,
+      diff_paint_specialists = h_paint_specialists - a_paint_specialists,
+      diff_game_score_metric = h_game_score_metric - a_game_score_metric,
+    ) %>%
+    select(
+      conference:a_seed,
+      starts_with("diff_"),
+      h_cumulative_unique_lineups,
+      a_cumulative_unique_lineups
+    )
+  return(bracket_features)
+}
+
+# Function for Conference based playoffs rounds 
+run_series <- function(bracket_features,xgb_last) {
+  # Create bracket checker
+  bracket_checker <- bracket_features %>%
+    select(conference:seed_id) %>%
+    distinct(conference,round_name,round_number, seed_id) %>%
+    mutate(
+      winner = NA,
+      loser = NA,
+      total_games = NA
+    )
+  
+  # Create distinct conference, seed groups
+  initial_seed_ids_df <- bracket_features %>%
+    distinct(conference,seed_id)
+  
+  conference_groups <- split(initial_seed_ids_df, initial_seed_ids_df$conference)
+  
+  # Loop through each conference 
+  for(conf in names(conference_groups)) {
+    # Extract the current conference data frame
+    conference_data <- conference_groups[[conf]]
+    
+    for(seed in conference_data$seed_id) {
+      # Filter rows that match the current series_id
+      indv_series <- bracket_features %>%
+        filter(seed_id == seed & conference == conf)
+      
+      u_seed <- indv_series %>% slice_min(order_by = h_seed, n = 1) %>% distinct(h_team) %>% pull(h_team)
+      b_seed <- indv_series %>% slice_max(order_by = h_seed, n = 1) %>% distinct(h_team) %>% pull(h_team)
+      
+      if (length(u_seed) > 1) {
+        b_seed <- u_seed[2]
+        u_seed <- u_seed[1]
+      }
+      
+      u_seed_wins = 0
+      u_seed_losses = 0
+      b_seed_wins = 0
+      b_seed_losses = 0
+      
+      for (row_n in 1:nrow(indv_series)) {
+        indiv_game = indv_series %>%
+          filter(game_number == row_n)
+        
+        home_team = indiv_game$h_team
+        away_team = indiv_game$a_team
+        
+        pred_winner = predict(
+          xgb_last %>% extract_workflow(), 
+          new_data = indiv_game,
+          type = "prob",
+        )
+        
+        is_home_win = sample(x = c(1, 0), size = 1, replace = TRUE,
+                             prob = c(pred_winner$.pred_1, pred_winner$.pred_0))
+        
+        # Updating the series_tracker based on the game outcome
+        if (is_home_win == 1) {
+          if (home_team == u_seed)  {
+            # Upper seed wins
+            u_seed_wins <- u_seed_wins + 1
+            b_seed_losses <- b_seed_losses + 1
+          } else {
+            # Lower seed wins
+            b_seed_wins <- b_seed_wins + 1
+            u_seed_losses <- u_seed_losses + 1
+          }
+        } else {
+          if (home_team == u_seed)  {
+            # Upper seed loses
+            b_seed_wins <- b_seed_wins + 1
+            u_seed_losses <- u_seed_losses + 1
+          } else {
+            # Lower seed loses
+            u_seed_wins <- u_seed_wins + 1
+            b_seed_losses <- b_seed_losses + 1
+          }
+        }
+        
+        # Check if either team has won 4 games
+        if (u_seed_wins >= 4 || b_seed_wins >= 4) {
+          if (u_seed_wins >= 4) {
+            # If Upper seed wins they advance
+            total_games <- u_seed_wins + u_seed_losses
+            bracket_checker$winner[bracket_checker$seed_id == seed & bracket_checker$conference == conf] <- u_seed
+            bracket_checker$loser[bracket_checker$seed_id == seed & bracket_checker$conference == conf] <- b_seed
+            bracket_checker$total_games[bracket_checker$seed_id == seed & bracket_checker$conference == conf] <- total_games
+            
+          } else{
+            # If Lower seed wins they advance
+            total_games <- b_seed_wins + b_seed_losses
+            bracket_checker$winner[bracket_checker$seed_id == seed & bracket_checker$conference == conf] <- b_seed
+            bracket_checker$loser[bracket_checker$seed_id == seed & bracket_checker$conference == conf] <- u_seed
+            bracket_checker$total_games[bracket_checker$seed_id == seed & bracket_checker$conference == conf] <- total_games
+            
+          }
+          break  # Exit the loop
+        }
+      }
+    }
+  }
+  return(bracket_checker)
+}
+
+# Function to ensure that the higher seeded team starts as home team in case of upset
+align_bracket_seeding <- function(bracket_with_features) {
+  # Determine which match ups need swapping based on the first game
+  swap_teams <- bracket_with_features %>%
+    filter(game_number == 1) %>%
+    mutate(need_swap = h_seed > a_seed) %>%
+    select(matchup_id, need_swap)
+  
+  # Join this back to the original bracket_with_features
+  bracket_with_features <- bracket_with_features %>%
+    left_join(swap_teams, by = "matchup_id")
+  
+  bracket_with_features_aligned <- bracket_with_features %>%
+    mutate(
+      # Swap teams
+      h_team_fixed = ifelse(need_swap, a_team, h_team),
+      a_team_fixed = ifelse(need_swap, h_team, a_team),
+      # Swap seeds
+      h_seed_fixed = ifelse(need_swap, a_seed, h_seed),
+      a_seed_fixed = ifelse(need_swap, h_seed, a_seed)
+    ) %>%
+    select(-c(need_swap,a_team, h_team, a_team, h_seed, a_seed)) %>%
+    rename(
+      "h_team" = h_team_fixed,
+      "a_team" = a_team_fixed,
+      "h_seed" = h_seed_fixed,
+      "a_seed" = a_seed_fixed
+    ) %>%
+    select(
+      conference:game_number,
+      h_team,a_team,
+      season:gamedate,
+      h_seed,a_seed
+    )
+  
+  return(bracket_with_features_aligned)
+}
+
+# Function to get all combinations of ECF or WCF conferences
+get_cf_potential_matchups <- function() {
+  # Define potential winners in the upper and lower brackets
+  upper_bracket_winners <- c(1, 4, 5, 8)
+  lower_bracket_winners <- c(2, 3, 6, 7)
+  
+  # Generate all combinations of these winners for the conference finals
+  conference_finals_combinations <- expand.grid(upper_bracket = upper_bracket_winners, 
+                                                lower_bracket = lower_bracket_winners) %>%
+    # Ensure the format "higher seed-lower seed"
+    mutate(Conference_Final_Matchup = ifelse(upper_bracket < lower_bracket, 
+                                             paste(upper_bracket, lower_bracket, sep = "-"),
+                                             paste(lower_bracket, upper_bracket, sep = "-"))) %>%
+    # Remove duplicates (as some match ups might repeat with seeds flipping)
+    distinct(Conference_Final_Matchup) %>%
+    arrange(Conference_Final_Matchup)
+  
+  return(conference_finals_combinations$Conference_Final_Matchup)
+}
+
+# Function run n number of sims using the model and playoff seeding
+playoff_sim <- function(sims, xgb_last, playoff_team_seed){
+  
+  results_list <- list()
+  final_series_list <- list()
+  
+  for (sim_no in 1:sims) { # number of sims to run
+    # Get most recent features
+    # Ratings
+    most_recent_ratings <- hist_ratings %>%
+      left_join(
+        game_level %>% select(nbagameid,season,gametype),
+        by = c("season","nbagameid")
+      ) %>%
+      filter(season == 2023 & gametype == 2) %>%
+      group_by(team) %>%
+      top_n(n = 1, wt = nbagameid) %>%
+      ungroup() %>%
+      select(-season, -nbagameid, -rating_period, -nbagameid_prev, -gametype)
+    
+    # Rolling features
+    most_recent_rolling_features <- rolling_mean_features %>%
+      left_join(
+        game_level %>% select(nbagameid,season,gametype),
+        by = c("season","nbagameid")
+      ) %>%
+      filter(season == 2023 & gametype == 2) %>%
+      group_by(team) %>%
+      top_n(n = 1, wt = nbagameid) %>%
+      ungroup() %>%
+      select(-season, -nbagameid, -gametype, -is_home)
+    
+    # Player features
+    most_recent_player_features <- player_features %>%
+      left_join(
+        game_level %>% select(nbagameid,season,gametype),
+        by = c("season","nbagameid")
+      ) %>%
+      filter(season == 2023 & gametype == 2) %>%
+      group_by(team) %>%
+      top_n(n = 1, wt = nbagameid) %>%
+      ungroup() %>%
+      select(-season, -nbagameid, -gametype)
+    
+    # Match-ups for 2024 playoff brackets
+    # Playoff seeds by team
+    playoff_team_seeding <- data.frame(
+      team_name = c("BOS", "MIA", "CLE", "ORL", "MIL", "IND", "NYK", "PHI",
+                    "OKC", "NOP", "LAC", "DAL", "MIN", "PHX", "DEN", "LAL"),
+      seed = c(1, 8, 4, 5, 3, 6, 2, 7,
+               1, 8, 4, 5, 3, 6, 2, 7),
+      stringsAsFactors = FALSE
+    )
+    
+    # Round 1 initial match ups
+    initial_matchups <- list(
+      "East" = list("BOS" = "MIA", "CLE" = "ORL", "MIL" = "IND", "NYK" = "PHI"),
+      "West" = list("OKC" = "NOP", "LAC" = "DAL", "MIN" = "PHX", "DEN" = "LAL")
+    )
+    
+    # Create the playoff bracket
+    initial_playoff_bracket <- create_round_bracket(initial_matchups,1, playoff_team_seed)
+    
+    # Join in latest features from last regular season games for each team
+    initial_bracket_features <- bracket_with_features(initial_playoff_bracket, most_recent_ratings,most_recent_rolling_features,most_recent_player_features) %>%
+      # Add match up_id
+      mutate(
+        matchup_id = pmap_chr(list(h_team, a_team, h_seed, a_seed), ~ {
+          teams <- c(..1, ..2)
+          seeds <- c(..3, ..4)
+          sorted_teams <- teams[order(seeds)]
+          paste(sorted_teams, collapse = "-")
+        })
+      ) %>%
+      group_by(matchup_id) %>%
+      # Add seed_id
+      mutate(
+        seed_id = pmap_chr(list(h_seed, a_seed), ~paste(sort(c(...)), collapse = "-"))
+      ) %>%
+      select(
+        conference:a_seed,
+        matchup_id,
+        seed_id,
+        starts_with("diff_"),
+        h_cumulative_unique_lineups,
+        a_cumulative_unique_lineups
+      )
+    
+    # Initial bracket tracker
+    initial_bracket_checker <- run_series(initial_bracket_features,xgb_last)
+    
+    # Track winners and losers from R1
+    e_r1_1_to_8_winner <- initial_bracket_checker$winner[initial_bracket_checker$seed_id == "1-8" & initial_bracket_checker$conference == "East"]
+    e_r1_1_to_8_loser <- initial_bracket_checker$loser[initial_bracket_checker$seed_id == "1-8" & initial_bracket_checker$conference == "East"]
+    e_r1_4_to_5_winner <- initial_bracket_checker$winner[initial_bracket_checker$seed_id == "4-5" & initial_bracket_checker$conference == "East"]
+    e_r1_4_to_5_loser <- initial_bracket_checker$loser[initial_bracket_checker$seed_id == "4-5" & initial_bracket_checker$conference == "East"]
+    e_r1_3_to_6_winner <- initial_bracket_checker$winner[initial_bracket_checker$seed_id == "3-6" & initial_bracket_checker$conference == "East"]
+    e_r1_3_to_6_loser <- initial_bracket_checker$loser[initial_bracket_checker$seed_id == "3-6" & initial_bracket_checker$conference == "East"]
+    e_r1_2_to_7_winner <- initial_bracket_checker$winner[initial_bracket_checker$seed_id == "2-7" & initial_bracket_checker$conference == "East"]
+    e_r1_2_to_7_loser <- initial_bracket_checker$loser[initial_bracket_checker$seed_id == "2-7" & initial_bracket_checker$conference == "East"]
+    
+    w_r1_1_to_8_winner <- initial_bracket_checker$winner[initial_bracket_checker$seed_id == "1-8" & initial_bracket_checker$conference == "West"]
+    w_r1_1_to_8_loser <- initial_bracket_checker$loser[initial_bracket_checker$seed_id == "1-8" & initial_bracket_checker$conference == "West"]
+    w_r1_4_to_5_winner <- initial_bracket_checker$winner[initial_bracket_checker$seed_id == "4-5" & initial_bracket_checker$conference == "West"]
+    w_r1_4_to_5_loser <- initial_bracket_checker$loser[initial_bracket_checker$seed_id == "4-5" & initial_bracket_checker$conference == "West"]
+    w_r1_3_to_6_winner <- initial_bracket_checker$winner[initial_bracket_checker$seed_id == "3-6" & initial_bracket_checker$conference == "West"]
+    w_r1_3_to_6_loser <- initial_bracket_checker$loser[initial_bracket_checker$seed_id == "3-6" & initial_bracket_checker$conference == "West"]
+    w_r1_2_to_7_winner <- initial_bracket_checker$winner[initial_bracket_checker$seed_id == "2-7" & initial_bracket_checker$conference == "West"]
+    w_r1_2_to_7_loser <- initial_bracket_checker$loser[initial_bracket_checker$seed_id == "2-7" & initial_bracket_checker$conference == "West"]
+    
+    # print("R1 successful")
+    
+    # Get R2 match ups
+    r2_matchups <- list(
+      "East" = setNames(list(e_r1_4_to_5_winner, e_r1_3_to_6_winner),
+                        c(e_r1_1_to_8_winner, e_r1_2_to_7_winner)),
+      "West" = setNames(list(w_r1_4_to_5_winner, w_r1_3_to_6_winner),
+                        c(w_r1_1_to_8_winner, w_r1_2_to_7_winner))
+    )
+    
+    # Get R2 bracket
+    r2_playoff_bracket <- create_round_bracket(r2_matchups, 2, playoff_team_seed) %>%
+      # Add matchup_id for alignment purposes
+      mutate(
+        matchup_id = pmap_chr(list(h_team, a_team), ~paste(sort(c(...)), collapse = "-"))
+      )
+    
+    # Align bracket before adding features
+    r2_playoff_bracket_aligned <- align_bracket_seeding(r2_playoff_bracket)
+    
+    # Add features to R2 bracket
+    r2_playoff_bracket_features <- bracket_with_features(r2_playoff_bracket_aligned, most_recent_ratings,most_recent_rolling_features,most_recent_player_features) %>%
+      # Add matchup_id
+      mutate(
+        matchup_id = pmap_chr(list(h_team, a_team, h_seed, a_seed), ~ {
+          teams <- c(..1, ..2)
+          seeds <- c(..3, ..4)
+          sorted_teams <- teams[order(seeds)]
+          paste(sorted_teams, collapse = "-")
+        })
+      ) %>%
+      group_by(matchup_id) %>%
+      # Add seed_id
+      mutate(
+        seed_id = pmap_chr(list(h_seed, a_seed), ~paste(sort(c(...)), collapse = "-"))
+      ) %>%
+      select(
+        conference:a_seed,
+        matchup_id,
+        seed_id,
+        starts_with("diff_"),
+        h_cumulative_unique_lineups,
+        a_cumulative_unique_lineups
+      )
+    
+    # R2 results
+    r2_bracket_checker <- run_series(r2_playoff_bracket_features,xgb_last)
+    
+    # Track winners and losers from R2
+    e_r2_u_winner <- r2_bracket_checker$winner[
+      (r2_bracket_checker$seed_id == "1-4" | r2_bracket_checker$seed_id == "1-5" | 
+         r2_bracket_checker$seed_id == "4-8" | r2_bracket_checker$seed_id == "5-8") &
+        r2_bracket_checker$conference == "East"]
+    
+    e_r2_u_loser <- r2_bracket_checker$loser[
+      (r2_bracket_checker$seed_id == "1-4" | r2_bracket_checker$seed_id == "1-5" | 
+         r2_bracket_checker$seed_id == "4-8" | r2_bracket_checker$seed_id == "5-8") &
+        r2_bracket_checker$conference == "East"]
+    
+    e_r2_l_winner <- r2_bracket_checker$winner[
+      (r2_bracket_checker$seed_id == "2-3" | r2_bracket_checker$seed_id == "2-6" | 
+         r2_bracket_checker$seed_id == "3-7" | r2_bracket_checker$seed_id == "6-7") &
+        r2_bracket_checker$conference == "East"]
+    
+    e_r2_l_loser <- r2_bracket_checker$loser[
+      (r2_bracket_checker$seed_id == "2-3" | r2_bracket_checker$seed_id == "2-6" | 
+         r2_bracket_checker$seed_id == "3-7" | r2_bracket_checker$seed_id == "6-7") &
+        r2_bracket_checker$conference == "East"]
+    
+    w_r2_u_winner <- r2_bracket_checker$winner[
+      (r2_bracket_checker$seed_id == "1-4" | r2_bracket_checker$seed_id == "1-5" | 
+         r2_bracket_checker$seed_id == "4-8" | r2_bracket_checker$seed_id == "5-8") &
+        r2_bracket_checker$conference == "West"]
+    
+    w_r2_u_loser <- r2_bracket_checker$loser[
+      (r2_bracket_checker$seed_id == "1-4" | r2_bracket_checker$seed_id == "1-5" | 
+         r2_bracket_checker$seed_id == "4-8" | r2_bracket_checker$seed_id == "5-8") &
+        r2_bracket_checker$conference == "West"]
+    
+    w_r2_l_winner <- r2_bracket_checker$winner[
+      (r2_bracket_checker$seed_id == "2-3" | r2_bracket_checker$seed_id == "2-6" | 
+         r2_bracket_checker$seed_id == "3-7" | r2_bracket_checker$seed_id == "6-7") &
+        r2_bracket_checker$conference == "West"]
+    
+    w_r2_l_loser <- r2_bracket_checker$loser[
+      (r2_bracket_checker$seed_id == "2-3" | r2_bracket_checker$seed_id == "2-6" | 
+         r2_bracket_checker$seed_id == "3-7" | r2_bracket_checker$seed_id == "6-7") &
+        r2_bracket_checker$conference == "West"]
+    
+    # print("R2 successful")
+    
+    # Get Conference finals match ups
+    r3_matchups <- list(
+      "East" = setNames(list(e_r2_l_winner),
+                        c(e_r2_u_winner)),
+      "West" = setNames(list(w_r2_l_winner),
+                        c(w_r2_u_winner))
+    )
+    
+    # Get Conference finals bracket
+    r3_playoff_bracket <- create_round_bracket(r3_matchups, 3, playoff_team_seed) %>%
+      # Add matchup_id for alignment purposes
+      mutate(
+        matchup_id = pmap_chr(list(h_team, a_team), ~paste(sort(c(...)), collapse = "-"))
+      )
+    
+    # Align seeding for R2 bracket
+    r3_playoff_bracket_aligned <- align_bracket_seeding(r3_playoff_bracket)
+    
+    # Add features to R2 bracket
+    r3_playoff_bracket_features <- bracket_with_features(r3_playoff_bracket_aligned, most_recent_ratings,most_recent_rolling_features,most_recent_player_features) %>%
+      # Add matchup_id
+      mutate(
+        matchup_id = pmap_chr(list(h_team, a_team, h_seed, a_seed), ~ {
+          teams <- c(..1, ..2)
+          seeds <- c(..3, ..4)
+          sorted_teams <- teams[order(seeds)]
+          paste(sorted_teams, collapse = "-")
+        })
+      ) %>%
+      group_by(matchup_id) %>%
+      # Add seed_id
+      mutate(
+        seed_id = pmap_chr(list(h_seed, a_seed), ~paste(sort(c(...)), collapse = "-"))
+      ) %>%
+      select(
+        conference:a_seed,
+        matchup_id,
+        seed_id,
+        starts_with("diff_"),
+        h_cumulative_unique_lineups,
+        a_cumulative_unique_lineups
+      )
+    
+    # Conference finals results
+    r3_bracket_checker <- run_series(r3_playoff_bracket_features,xgb_last)
+    
+    # Set R4 match ups
+    cf_potential_matchups <- get_cf_potential_matchups()
+    
+    # Track winners and losers for R4 bracket
+    e_r3_winner <- r3_bracket_checker %>%
+      filter(seed_id %in% cf_potential_matchups &
+               conference == "East") %>%
+      pull(winner)
+    
+    e_r3_loser <- r3_bracket_checker %>%
+      filter(seed_id %in% cf_potential_matchups &
+               conference == "East") %>%
+      pull(loser)
+    
+    w_r3_winner <- r3_bracket_checker %>%
+      filter(seed_id %in% cf_potential_matchups &
+               conference == "West") %>%
+      pull(winner)
+    
+    w_r3_loser <- r3_bracket_checker %>%
+      filter(seed_id %in% cf_potential_matchups &
+               conference == "West") %>%
+      pull(loser)
+    
+    # print("R3 successful")
+    
+    # Get Finals match ups
+    r4_matchups <- list(
+      "Both" = setNames(list(e_r3_winner),
+                        c(w_r3_winner))
+    )
+    
+    # Get Finals bracket
+    r4_playoff_bracket <- create_round_bracket(r4_matchups, 4, playoff_team_seed) %>%
+      # Add matchup_id for alignment purposes
+      mutate(
+        matchup_id = pmap_chr(list(h_team, a_team), ~paste(sort(c(...)), collapse = "-"))
+      )
+    
+    # Align seeding for Finals bracket
+    r4_playoff_bracket_aligned <- align_bracket_seeding(r4_playoff_bracket)
+    
+    # Add features to Finals bracket
+    r4_playoff_bracket_features <- bracket_with_features(r4_playoff_bracket_aligned, most_recent_ratings,most_recent_rolling_features,most_recent_player_features) %>%
+      # Add matchup_id
+      mutate(
+        matchup_id = pmap_chr(list(h_team, a_team, h_seed, a_seed), ~ {
+          teams <- c(..1, ..2)
+          seeds <- c(..3, ..4)
+          sorted_teams <- teams[order(seeds)]
+          paste(sorted_teams, collapse = "-")
+        })
+      ) %>%
+      group_by(matchup_id) %>%
+      # Add seed_id
+      mutate(
+        seed_id = pmap_chr(list(h_seed, a_seed), ~paste(sort(c(...)), collapse = "-"))
+      ) %>%
+      select(
+        conference:a_seed,
+        matchup_id,
+        seed_id,
+        starts_with("diff_"),
+        h_cumulative_unique_lineups,
+        a_cumulative_unique_lineups
+      )
+    
+    # Finals results
+    r4_bracket_checker <- run_series(r4_playoff_bracket_features,xgb_last)
+    
+    # Track winners and losers for Final
+    f_r4_winner <- r4_bracket_checker %>% 
+      filter(conference == "Both") %>%
+      pull(winner)
+    
+    f_r4_loser <- r4_bracket_checker %>% 
+      filter(conference == "Both") %>%
+      pull(loser)
+    
+    # print("R4 successful")
+
+    # Add all series results to res list
+    results_list[[sim_no]] <- bind_rows(initial_bracket_checker, r2_bracket_checker, r3_bracket_checker, r4_bracket_checker)
+    results_list[[sim_no]]$sim_num <- sim_no
+    
+    final_series_list[[sim_no]] <- data.frame(
+      simulation_id = rep(sim_no, 16),
+      conference = c(
+        "East","East","East","East","West","West","West","West",
+        "East","East","West","West",
+        "East" , "West",
+        "Both",
+        "Both"
+      ),
+      round_made = c(
+        1,1,1,1,1,1,1,1,
+        2,2,2,2,
+        3,3,
+        4,
+        5
+      ),
+      team_name = c(
+        e_r1_1_to_8_winner,e_r1_4_to_5_winner,e_r1_3_to_6_winner,e_r1_2_to_7_winner,w_r1_1_to_8_winner,w_r1_4_to_5_winner,w_r1_3_to_6_winner,w_r1_2_to_7_winner,
+        e_r2_u_winner,e_r2_l_winner,w_r2_u_winner,w_r2_l_winner,
+        e_r3_winner,w_r3_winner,
+        f_r4_winner,
+        f_r4_winner
+      )
+    )
+    # print(paste("Finished Sim:",sim_no))
+  }
+  
+  results <- bind_rows(results_list)
+  final_series <- bind_rows(final_series_list)
+  
+  resultdf <- list('results' = results, 'final_series' = final_series)
+  print("All sims complete!")
+  
+  return(resultdf)
+}
+
+# Function to get probability of winning between 2 teams in a given round
+get_series_prediction_2024 <- function(round, team1, team2, type = "Point Estimate", playoff_team_seed=playoff_team_seeding, sim_results=all_results) {
+  # Set league seeds for both inputted teams
+  team1_seed <- playoff_team_seed %>% filter(team_name == team1) %>% pull(league_seed)
+  team2_seed <-playoff_team_seed %>% filter(team_name == team2) %>% pull(league_seed)
+  
+  # Get match up in format as sim results
+  if (team1_seed < team2_seed) {
+    matchup = paste0(team1,'-',team2)
+  } else {
+    matchup = paste0(team2,'-',team1)
+  }
+  
+  # Adjust round text output for Finals series
+  if (round == "Finals") {
+    round_txt = "the Finals"
+  } else {
+    round_txt = round
+  }
+  
+  if (type == "Point Estimate") {
+    title <- "Series Win- Point Estimate"
+    
+    # Get probability of each team winning overall across rounds 
+    results_summary <- sim_results %>%
+      filter(
+        matchup_id == matchup
+        & round_name == round
+      ) %>%
+      group_by(matchup_id, round_number, round_name,winner) %>%
+      summarise(
+        win_count = n(), # Count the number of times each team has won
+        avg_total_games = mean(total_games), # Average number of total games played
+        .groups = 'drop'
+      ) %>%
+      group_by(matchup_id, round_number) %>%
+      mutate(
+        win_pct = win_count / sum(win_count) # Calculate win percentage
+      ) %>%
+      ungroup() %>%
+      # Join the logo URLs with the main data frame
+      left_join(logo_mapping, by = c("winner" = "team_name")) %>%
+      # Drop unnecessary cols
+      select(logo_url, win_pct, avg_total_games)
+    
+    # Create the table using gt
+    res_table <- gt(results_summary) %>%
+      tab_header(
+        title = title,
+        subtitle = paste("Simulated",round,"series games between", team1, "and", team2)
+      ) %>%
+      cols_label(
+        logo_url = "Team",
+        win_pct = "Win %",
+        avg_total_games = "Avg # of Games",
+      ) %>%
+      fmt_percent(
+        columns = c(win_pct),
+        decimals = 1
+      ) %>%
+      fmt_number(
+        columns = c(avg_total_games),
+        decimals = 1
+      ) %>%
+      tab_options(table.width = pct(40)) %>%
+      gt_img_rows(logo_url) %>%
+      tab_source_note("The % chance that a team wins a series in a given, average number of games.") %>%
+      gt_theme_538() %>%
+      tab_style(
+        style = cell_text(align = 'center'),
+        locations = cells_column_labels(columns = everything())
+      ) %>%
+      tab_style(
+        style = cell_text(align = 'center'),
+        locations = cells_body(columns = everything())
+      )
+  } else {
+    # Get probability of each team winning by n games
+    title <- "Series Win- Probabilistic"
+    
+    results_summary <- sim_results %>%
+      filter(
+        matchup_id == matchup
+        & round_name == round
+      ) %>%
+      group_by(matchup_id, round_number, round_name,total_games,winner) %>%
+      summarise(
+        win_count = n(), # Count the number of times each team has won
+        .groups = 'drop'
+      ) %>%
+      group_by(matchup_id, round_number,total_games) %>%
+      mutate(
+        win_pct = win_count / sum(win_count) # Calculate win percentage
+      ) %>%
+      ungroup() %>%
+      # Join the logo URLs with the main data frame
+      left_join(logo_mapping, by = c("winner" = "team_name")) %>%
+      # Drop unnecessary cols
+      select(logo_url, win_pct,total_games)
+      
+    # Create the table using gt
+    res_table <- gt(results_summary) %>%
+      tab_header(
+        title = title,
+        subtitle = paste("Simulated",round,"series games between", team1, "and", team2)
+      ) %>%
+      cols_label(
+        logo_url = "Team",
+        win_pct = "Win %",
+        total_games = "# of Games",
+      ) %>%
+      fmt_percent(
+        columns = c(win_pct),
+        decimals = 1
+      ) %>%
+      tab_options(table.width = pct(40)) %>%
+      gt_img_rows(logo_url) %>%
+      tab_source_note("The % chance that a team wins a series when playing a given total number of games.") %>%
+      gt_theme_538() %>%
+      tab_style(
+        style = cell_text(align = 'center'),
+        locations = cells_column_labels(columns = everything())
+      ) %>%
+      tab_style(
+        style = cell_text(align = 'center'),
+        locations = cells_body(columns = everything())
+      )
+  }
+  return(res_table)
+}
+
+```
+
+### Static Variables
+
+```{r}
+# Static variables ---------------------------
+
+# Logo URLs mapped to team names
+logo_mapping <- data.frame(
+  team_name = c("BOS", "MIA", "CLE", "ORL", "MIL", "IND", "NYK", "PHI", "OKC", "NOP", "LAC", "DAL", "MIN", "PHX", "DEN", "LAL"),
+  logo_url = c(
+    "https://content.sportslogos.net/logos/6/213/thumbs/slhg02hbef3j1ov4lsnwyol5o.gif",
+    "https://content.sportslogos.net/logos/6/214/thumbs/burm5gh2wvjti3xhei5h16k8e.gif",
+    "https://content.sportslogos.net/logos/6/222/thumbs/22253692023.gif",
+    "https://content.sportslogos.net/logos/6/217/thumbs/wd9ic7qafgfb0yxs7tem7n5g4.gif",
+    "https://content.sportslogos.net/logos/6/225/thumbs/22582752016.gif",
+    "https://content.sportslogos.net/logos/6/224/thumbs/22448122018.gif",
+    "https://content.sportslogos.net/logos/6/216/thumbs/21671702024.gif",
+    "https://content.sportslogos.net/logos/6/218/thumbs/21870342016.gif",
+    "https://content.sportslogos.net/logos/6/2687/thumbs/khmovcnezy06c3nm05ccn0oj2.gif",
+    "https://content.sportslogos.net/logos/6/4962/thumbs/496292922024.gif",
+    "https://content.sportslogos.net/logos/6/236/thumbs/23655422025.gif",
+    "https://content.sportslogos.net/logos/6/228/thumbs/22834632018.gif",
+    "https://content.sportslogos.net/logos/6/232/thumbs/23296692018.gif",
+    "https://content.sportslogos.net/logos/6/238/thumbs/23843702014.gif",
+    "https://content.sportslogos.net/logos/6/229/thumbs/22989262019.gif",
+    "https://content.sportslogos.net/logos/6/237/thumbs/23773242024.gif"
+  )
+)
+
+# Seeding for playoffs
+playoff_team_seeding <- data.frame(
+  team_name = c("BOS", "MIA", "CLE", "ORL", "MIL", "IND", "NYK", "PHI",
+                "OKC", "NOP", "LAC", "DAL", "MIN", "PHX", "DEN", "LAL"),
+  seed = c(
+    1, 8, 4, 5, 3, 6, 2, 7,
+    1, 8, 4, 5, 3, 6, 2, 7
+  ),
+  league_seed = c(
+    1, 16, 11, 12, 8, 15, 7, 14,
+    2, 9, 5, 6, 4, 10, 3, 13
+  ),
+  stringsAsFactors = FALSE
+)
+
+```
+
+### Initial Setup
+
+```{r}
+# Initial setup ---------------------------
+
+# Get game level data
+game_level <- team_data %>%
+  filter(season >= 2014 & off_home == 1) %>%
+  arrange(season, gamedate, nbagameid) %>%
+  mutate(gamedate = as.Date(gamedate)) %>%
+  select(season:gamedate,off_team,off_win,fg2made:shotattemptpoints) %>%
+  rename_with(~ paste0("h_", .), fg2made:shotattemptpoints) %>%
+  rename("h_team" = off_team, "is_win" = off_win) %>%
+  inner_join(team_data %>%
+               filter(season >= 2014 & off_home == 0) %>%
+               arrange(season, gamedate, nbagameid) %>%
+               mutate(gamedate = as.Date(gamedate)) %>%
+               select(season,nbagameid,off_team,fg2made:shotattemptpoints) %>%
+               rename_with(~ paste0("a_", .), fg2made:shotattemptpoints) %>%
+               rename("a_team" = off_team),
+             by = c("season","nbagameid")
+  ) %>%
+  select(season:h_team,a_team,is_win,h_fg2made:h_shotattemptpoints,a_fg2made:a_shotattemptpoints)
+```
+
+### Feature Development
+#### Team Features
+
+```{r}
+# Team Features ---------------------------
+
+# Advanced Box score Metrics
+game_level <- game_level %>%
+  # Offensive advanced team stats
+  mutate(
+    h_ppa = h_shotattemptpoints/h_shotattempts, # Points per attempt
+    h_ppp = h_shotattemptpoints/h_possessions, # Points per possession
+    h_tov_pct = h_turnovers/(h_shotattempts + h_turnovers), # Turnover %
+    h_blk_pct = a_blocksagainst/a_fg2attempted, # Block %
+    h_ortg = h_points/(h_possessions/100), # Offensive Rating
+    h_drtg = a_points/(a_possessions/100), # Defensive Rating
+    h_ntrg = h_ortg - h_drtg, # Net Rating
+    h_efg_pct = (h_fgmade + (0.5 * h_fg3made)) / (h_fgattempted * 100), # Effective Field Goal %
+    h_ts_pct = h_points / (2 * (h_fgattempted + .475 * h_ftattempted)), # True Shooting %
+    h_ft_rate = h_ftmade / h_fgattempted, # Free Throw Rate
+  ) %>%
+  # Defensive advanced team stats
+  mutate(
+    a_ppa = a_shotattemptpoints/a_shotattempts, # Points per attempt
+    a_ppp = a_shotattemptpoints/a_possessions, # Points per possession
+    a_tov_pct = a_turnovers/(a_shotattempts + a_turnovers), # Turnover %
+    a_blk_pct = h_blocksagainst/h_fg2attempted, # Block %
+    a_ortg = a_points/(a_possessions/100), # Offensive Rating
+    a_drtg = h_points/(h_possessions/100), # Defensive Rating
+    a_ntrg = a_ortg - a_drtg, # Net Rating
+    a_efg_pct = (a_fgmade + (0.5 * a_fg3made)) / (a_fgattempted * 100), # Effective Field Goal %
+    a_ts_pct = a_points / (2 * (a_fgattempted + .475 * a_ftattempted)), # True Shooting %
+    a_ft_rate = a_ftmade / a_fgattempted, # Free Throw Rate
+  )
+
+# Rolling Averages
+# Need to convert back to origin 2 row per match df structure
+team_level <- game_level %>%
+  mutate(h_is_home = 1) %>%
+  select(season,nbagameid, gamedate, h_team, h_is_home, h_fg2made:h_shotattemptpoints, h_ppa:h_ft_rate) %>%
+  rename_with(~ str_remove_all(., "h_"), h_team:h_ft_rate) %>%
+  bind_rows (
+    game_level %>% 
+      mutate(a_is_home = 0) %>%
+      select(season,nbagameid, gamedate, a_team, a_is_home, a_fg2made:a_shotattemptpoints, a_ppa:a_ft_rate) %>%
+      rename_with(~ str_remove_all(., "a_"), a_team:a_ft_rate)
+  ) %>%
+  arrange(season, nbagameid)
+
+# Get rolling avg for box score and advanced stats
+rolling_mean_features <- team_level %>%
+  mutate_at(
+    vars(fg2made:ft_rate), # Columns for which we want a rolling mean
+    .funs = ~ roll_mean(., 5, align = "right", fill = NA) # Rolling mean for last 5 games 
+  ) %>%
+  ungroup() %>%
+  select(season, nbagameid, team, is_home, fg2made:ft_rate) %>%
+  filter(!is.na(fg2made))
+
+
+# Time/Date Features
+# Calculate days since last game and days until next game
+days_since_stats <- team_level %>%
+  select(season, nbagameid, gamedate, team) %>%
+  arrange(season, team, gamedate) %>% # Arrange by season, team, and date
+  group_by(season, team) %>% # Group by season and team
+  mutate(
+    days_since_last_game = c(0, diff(gamedate)),  # Calculate days since last game
+    days_until_next_game = as.integer(lead(gamedate) - gamedate) # Calculate days until next game
+  ) %>%
+  mutate(
+    # Reset the days since last game for the first game of each season
+    days_since_last_game = if_else(row_number() == 1, NA, days_since_last_game),
+    days_until_next_game = if_else(row_number() == n(), NA, as.integer(days_until_next_game))
+  ) %>%
+  ungroup()
+
+```
+
+#### Player Features
+
+```{r}
+# Player Features ---------------------------
+
+# Get player level game data
+player_level <- player_data %>%
+  filter(season >= 2014) %>%
+  mutate(gamedate = as.Date(gamedate)) %>%
+  arrange(season, gamedate, nbagameid, nbateamid)
+
+# Get number of players injured per team per match
+player_features <- player_level %>%
+  # Calculate various player-specific percentages and metrics
+  mutate(
+    oreb_pct = reboffensive / offensivereboundchances,  # Offensive rebound percentage
+    dreb_pct = rebdefensive / defensivereboundchances,  # Defensive rebound percentage
+    tov_pct = turnovers / (fgattempted + turnovers),  # Turnover percentage
+    stl_pct = replace(steals / defensivepossessions, is.infinite(steals / defensivepossessions), NA),  # Steal percentage, handling infinite values
+    blk_pct = replace(blocks / opponentteamfg2attempted, is.infinite(blocks / opponentteamfg2attempted), NA),  # Block percentage, handling infinite values
+    usg_pct = (shotattempts + turnovers) / (teamshotattempts + teamturnovers),  # Usage percentage
+    ast_pct = assists / (teamfgmade - (fg3made + fg2made)),  # Assist percentage
+    pnt3_pct = fg3made / fg3attempted,  # 3-point success percentage
+    pnt2_pct = fg2made / fg2attempted,  # 2-point success percentage
+    h_ast_pct = assists / (fgattempted + (0.475 * (ftattempted + assists + turnovers))),  # Hybrid assist percentage
+    game_score_metric = points + (0.4 * fgmade) - (0.7 * fgattempted) - (0.4 * (ftattempted - ftmade)) + (0.7 * reboffensive) + (0.3 * rebdefensive) + steals + (0.7 * assists) + (0.7 * blocks) - (0.4 * ((defensivefouls + offensivefouls) - turnovers))  # Game score metric calculation
+  ) %>%
+  # Group by season, game, and team for summary statistics
+  group_by(season, nbagameid, team) %>%
+  summarise(
+    mean_oreb_pct = mean(oreb_pct, na.rm = TRUE),
+    mean_dreb_pct = mean(dreb_pct, na.rm = TRUE),
+    mean_tov_pct = mean(tov_pct, na.rm = TRUE),
+    mean_stl_pct = mean(stl_pct, na.rm = TRUE),
+    mean_blk_pct = mean(blk_pct, na.rm = TRUE),
+    mean_usg_pct = mean(usg_pct, na.rm = TRUE),
+    mean_ast_pct = mean(ast_pct, na.rm = TRUE),
+    max_usg_pct = max(usg_pct, na.rm = TRUE), # Max usage % as a proxy for teams reliant on star players for success
+    inj_players = sum(missed),  # Total injured players
+    avg_mp_starter = mean(seconds[starter == 1], na.rm = TRUE) / 60,  # Average minutes played by starters
+    avg_mp_bench = mean(seconds[starter == 0], na.rm = TRUE) / 60,  # Average minutes played by bench players
+    pnts_by_starters = sum(points[starter == 1], na.rm = TRUE),  # Points by starters
+    pnts_by_bench = sum(points[starter == 0], na.rm = TRUE),  # Points by bench
+    sharp_shooters = sum(pnt3_pct > 0.35, na.rm = TRUE),  # Count of sharp shooters
+    paint_specialists = sum(pnt2_pct > 0.50, na.rm = TRUE),  # Count of paint specialists
+    game_score_metric = mean(game_score_metric, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  # Join with data to track unique lineups over time
+  inner_join(
+    player_level %>%
+      filter(starter == 1) %>%
+      arrange(season, team, nbagameid, nbapersonid) %>%
+      group_by(season, team, nbagameid) %>%
+      summarise(lineup = paste(nbapersonid, collapse = "-"), .groups = 'drop') %>%
+      ungroup() %>%
+      group_by(season, team) %>%
+      arrange(season, team, nbagameid) %>%
+      # Track unique lineups by cumulative count of first occurrences
+      mutate(
+        cumulative_unique_lineups = cumsum(!duplicated(lineup))
+      ) %>%
+      ungroup() %>%
+      select(-lineup),
+    by = c("season", "nbagameid", "team")
+  )
+
+```
+
+#### Team Strength Feature
+
+```{r}
+# Team Strength Features ---------------------------
+
+# Build and run the glicko-2. rating system with set parameters
+glicko2_model <- glicko2(
+  game_level %>% arrange(season,nbagameid) %>% mutate(nbagameid = row_number()) %>% select(nbagameid,h_team,a_team,is_win),
+  status = NULL,
+  init = c(2200,250,0.03),
+  tau = 1.2,
+  history = TRUE
+)
+
+# Get historical ratings for each game in training data
+hist_ratings <- glicko2_model[2] %>%
+  # Convert the matrix to a data frame
+  as.data.frame() %>%
+  # Add row names as a column for team names
+  rownames_to_column(var = "team") %>%
+  # Pivot data longer to transform the data from wide to long format
+  pivot_longer(
+    cols = -team,
+    names_to = "rating_period",
+    values_to = "rating"
+  ) %>%
+  # Filter columns that end with '.Lag'
+  filter(endsWith(rating_period, ".Lag")) %>%
+  # Extract numbers from 'rating_period' strings
+  mutate(rating_period = str_extract(rating_period, "\\d+")) %>%
+  # Temporarily rename the 'rating' column for lag identification
+  rename(is_lag = rating) %>%
+  # Join with the main ratings from the Glicko2 model
+  left_join(
+    glicko2_model[2] %>%
+      as.data.frame() %>%
+      # Add row names as a column for team names
+      rownames_to_column(var = "team") %>%
+      # Pivot data longer to transform the data from wide to long format
+      pivot_longer(
+        cols = -team,
+        names_to = "rating_period",
+        values_to = "rating"
+      ) %>%
+      # Filter columns that end with '.Rating'
+      filter(endsWith(rating_period, ".Rating")) %>%
+      # Extract numbers from 'rating_period' strings
+      mutate(rating_period = str_extract(rating_period, "\\d+")),
+    by = c("team", "rating_period")
+  ) %>%
+  # Filter for entries where 'is_lag' is zero and 'rating' is not the initial value (2200)
+  filter(is_lag == 0 & rating != 2200) %>%
+  # Convert 'rating_period' to numeric for sorting
+  mutate(rating_period = as.numeric(rating_period)) %>%
+  # Remove the 'is_lag' column
+  select(-is_lag) %>%
+  # Arrange by 'rating_period' to ensure chronological order
+  arrange(rating_period) %>%
+  # Map game and season IDs from another data set
+  mutate(
+    nbagameid = team_level$nbagameid,
+    season = team_level$season
+  ) %>%
+  # Group by 'season' and 'team' to handle game-level data
+  group_by(season, team) %>%
+  arrange(nbagameid) %>%
+  # Create a lagged 'nbagameid' to link ratings to specific games
+  mutate(nbagameid_prev = lag(nbagameid)) %>%
+  ungroup() %>%
+  # Filter out any missing values in 'nbagameid_prev'
+  filter(!is.na(nbagameid_prev))
+
+```
+
+#### Combine Features
+
+```{r}
+# Combine features ---------------------------
+
+# Last game look-up helper
+last_game_lookup <- team_level %>%
+  rename(team = team) %>%
+  group_by(season, team) %>%
+  arrange(nbagameid) %>%
+  mutate(nbagameid_prev = lag(nbagameid)) %>%
+  select(season, team, nbagameid, nbagameid_prev) %>% 
+  filter(!is.na(nbagameid_prev))
+
+# Preparing the features data frame by joining game data with historical team ratings and player statistics
+features <- game_level %>%
+  select(season:is_win) %>%
+  arrange(season,nbagameid) %>%
+  # Join in last game look-up df
+  inner_join( 
+    last_game_lookup,
+    by = c(
+      "nbagameid" = "nbagameid",
+      "h_team" = "team",
+      "season" = "season"
+    )
+  ) %>%
+  rename("h_nbagameid_prev" = nbagameid_prev) %>%
+  inner_join(
+    last_game_lookup,
+    by = c(
+      "nbagameid" = "nbagameid",
+      "a_team" = "team",
+      "season" = "season"
+    )
+  ) %>%
+  rename("a_nbagameid_prev" = nbagameid_prev) %>%
+  # Join in rating system feature
+  inner_join(
+    hist_ratings %>% arrange(rating_period),
+    by = c(
+      "season" = "season",
+      "h_nbagameid_prev" = "nbagameid",
+      "h_team" = "team"
+    )
+  ) %>%
+  rename("h_rating" = rating) %>%
+  inner_join(
+    hist_ratings %>% arrange(rating_period),
+    by = c(
+      "season" = "season",
+      "a_nbagameid_prev" = "nbagameid",
+      "a_team" = "team"
+    )
+  ) %>%
+  rename("a_rating" = rating) %>%
+  # Join in rolling mean features
+  inner_join(
+    rolling_mean_features %>% select(-is_home),
+    by = c(
+      "season" = "season",
+      "h_nbagameid_prev" = "nbagameid",
+      "h_team" = "team"
+    )
+  ) %>%
+  rename_with(~ paste0("h_", .), fg2made:ft_rate) %>%
+  inner_join(
+    rolling_mean_features %>% select(-is_home),
+    by = c(
+      "season" = "season",
+      "a_nbagameid_prev" = "nbagameid",
+      "a_team" = "team"
+    )
+  ) %>%
+  rename_with(~ paste0("a_", .), fg2made:ft_rate) %>%
+  # Join in player features
+  inner_join(
+    player_features,
+    by = c(
+      "season" = "season",
+      "h_nbagameid_prev" = "nbagameid",
+      "h_team" = "team"
+    )
+  ) %>%
+  rename_with(~ paste0("h_", .), mean_oreb_pct:cumulative_unique_lineups) %>%
+  inner_join(
+    player_features,
+    by = c(
+      "season" = "season",
+      "a_nbagameid_prev" = "nbagameid",
+      "a_team" = "team"
+    )
+  ) %>%
+  rename_with(~ paste0("a_", .), mean_oreb_pct:cumulative_unique_lineups) %>%
+  # Reduce number of features by finding difference between home and away teams
+  mutate(
+    diff_rating = h_rating - a_rating,
+    diff_fg2made = h_fg2made - a_fg2made,
+    diff_fg2missed = h_fg2missed - a_fg2missed,
+    diff_fg2attempted = h_fg2attempted - a_fg2attempted,
+    diff_fg3made = h_fg3made - a_fg3made,
+    diff_fg3missed = h_fg3missed - a_fg3missed,
+    diff_fg3attempted = h_fg3attempted - a_fg3attempted,
+    diff_fgmade = h_fgmade - a_fgmade,
+    diff_fgmissed = h_fgmissed - a_fgmissed,
+    diff_fgattempted = h_fgattempted - a_fgattempted,
+    diff_ftmade = h_ftmade - a_ftmade,
+    diff_ftmissed = h_ftmissed - a_ftmissed,
+    diff_ftattempted = h_ftattempted - a_ftattempted,
+    diff_reboffensive = h_reboffensive - a_reboffensive,
+    diff_rebdefensive = h_rebdefensive - a_rebdefensive,
+    diff_reboundchance = h_reboundchance - a_reboundchance,
+    diff_assists = h_assists - a_assists,
+    diff_stealsagainst = h_stealsagainst - a_stealsagainst,
+    diff_turnovers = h_turnovers - a_turnovers,
+    diff_blocksagainst = h_blocksagainst - a_blocksagainst,
+    diff_defensivefouls = h_defensivefouls - a_defensivefouls,
+    diff_offensivefouls = h_offensivefouls - a_offensivefouls,
+    diff_shootingfoulsdrawn = h_shootingfoulsdrawn - a_shootingfoulsdrawn,
+    diff_possessions = h_possessions - a_possessions,
+    diff_points = h_points - a_points,
+    diff_shotattempts = h_shotattempts - a_shotattempts,
+    diff_andones = h_andones - a_andones,
+    diff_shotattemptpoints = h_shotattemptpoints - a_shotattemptpoints,
+    diff_ppa = h_ppa - a_ppa,
+    diff_ppp = h_ppp - a_ppp,
+    diff_tov_pct = h_tov_pct - a_tov_pct,
+    diff_blk_pct = h_blk_pct - a_blk_pct,
+    diff_ortg = h_ortg - a_ortg,
+    diff_drtg = h_drtg - a_drtg,
+    diff_ntrg = h_ntrg - a_ntrg,
+    diff_efg_pct = h_efg_pct - a_efg_pct,
+    diff_ts_pct = h_ts_pct - a_ts_pct,
+    diff_ft_rate = h_ft_rate - a_ft_rate,
+    diff_mean_oreb_pct = h_mean_oreb_pct - a_mean_oreb_pct,
+    diff_mean_dreb_pct = h_mean_dreb_pct - a_mean_dreb_pct,
+    diff_mean_tov_pct = h_mean_tov_pct - a_mean_tov_pct,
+    diff_mean_stl_pct = h_mean_stl_pct - a_mean_stl_pct,
+    diff_mean_blk_pct = h_mean_blk_pct - a_mean_blk_pct,
+    diff_mean_usg_pct = h_mean_usg_pct - a_mean_usg_pct,
+    diff_mean_ast_pct = h_mean_ast_pct - a_mean_ast_pct,
+    diff_max_usg_pct = h_max_usg_pct - a_max_usg_pct,
+    diff_avg_mp_starter = h_avg_mp_starter - a_avg_mp_starter,
+    diff_avg_mp_bench = h_avg_mp_bench - a_avg_mp_bench,
+    diff_pnts_by_starters = h_pnts_by_starters - a_pnts_by_starters,
+    diff_pnts_by_bench = h_pnts_by_bench - a_pnts_by_bench,
+    diff_sharp_shooters = h_sharp_shooters - a_sharp_shooters,
+    diff_paint_specialists = h_paint_specialists - a_paint_specialists,
+    diff_game_score_metric = h_game_score_metric - a_game_score_metric,
+  ) %>%
+  # Select relevant columns
+  select(
+    season,
+    nbagameid,
+    gamedate,
+    h_team,
+    a_team,
+    is_win,
+    starts_with("diff_"),
+    h_cumulative_unique_lineups,
+    a_cumulative_unique_lineups
+  ) %>%
+  mutate(
+    is_win = as.factor(is_win)
+  )
+```
+
+#### Feature EDA
+
+```{r fig.width=12, fig.height=8, out.width='100%'}
+# Feature EDA ---------------------------
+
+# Box score metrics P1
+features %>%
+  mutate(is_win = ifelse(is_win == 1,"Win","Loss")) %>%
+  pivot_longer(diff_fg2made:diff_reboundchance, names_to = "stat", values_to = "value") %>%
+  ggplot(aes(is_win, value, color = is_win)) +
+  geom_boxplot(alpha = 0.4) +
+  facet_wrap(~stat, scales = "free_y", nrow = 4, ncol = 4) +
+  labs(y = NULL, color = NULL, fill = NULL)
+```
+
+There are no distinct differences in game outcome across these metrics. Intuition tells us that these metrics will not be good discriminators in our model.
+
+
+```{r fig.width=12, fig.height=8, out.width='100%'}
+# Box score metrics P2
+features %>%
+  mutate(is_win = ifelse(is_win == 1,"Win","Loss")) %>%
+  pivot_longer(diff_assists:diff_shotattemptpoints, names_to = "stat", values_to = "value") %>%
+  ggplot(aes(is_win, value, color = is_win)) +
+  geom_boxplot(alpha = 0.4) +
+  facet_wrap(~stat, scales = "free_y", nrow = 3, ncol = 6) +
+  labs(y = NULL, color = NULL, fill = NULL)
+```
+
+`diff_blocksagainst` is the only metric with a clear visual difference between game outcomes. Again, the difference box score metrics appear to mot be good discriminators of wins and losses.
+
+
+```{r fig.width=12, fig.height=8, out.width='100%'}
+# Advanced team and player metrics
+features %>%
+  mutate(is_win = ifelse(is_win == 1,"Win","Loss")) %>%
+  pivot_longer(diff_ppa:diff_max_usg_pct, names_to = "stat", values_to = "value") %>%
+  ggplot(aes(is_win, value, color = is_win)) +
+  geom_boxplot(alpha = 0.4) +
+  facet_wrap(~stat, scales = "free_y", nrow = 3, ncol = 6) +
+  labs(y = NULL, color = NULL, fill = NULL)
+
+```
+
+There is no clear differences across most of these metrics except for `diff_max_usg_pct` and `diff_ntrg`. It appears that these advanced metrics overall will not be good discriminators of wins and loses in our model.
+
+
+```{r}
+# Rating feature
+features %>%
+  mutate(is_win = ifelse(is_win == 1,"Win","Loss")) %>%
+  pivot_longer(diff_rating, names_to = "stat", values_to = "value") %>%
+  ggplot(aes(is_win, value, color = is_win)) +
+  geom_boxplot(alpha = 0.4) +
+  facet_wrap(~stat, scales = "free_y", nrow = 1) +
+  labs(y = NULL, color = NULL, fill = NULL)
+```
+
+We can see the biggest difference in game outcome in the `diff_rating` metric. This appears to be our strongest discriminator of wins and loses thus far.
+
+
+```{r}
+# Cumulative lineup features
+features %>%
+  mutate(is_win = ifelse(is_win == 1,"Win","Loss")) %>%
+  pivot_longer(h_cumulative_unique_lineups:a_cumulative_unique_lineups, names_to = "stat", values_to = "value") %>%
+  ggplot(aes(is_win, value, color = is_win)) +
+  geom_boxplot(alpha = 0.4) +
+  facet_wrap(~stat, scales = "free_y", nrow = 2) +
+  labs(y = NULL, color = NULL, fill = NULL)
+```
+
+We can see clear differences in game outcome between both `a_cumulative_unique_lineups` and `h_cumulative_unique_lineups`. This is an early indication that the number of unique starting lineups cumulative across seasons is a good discriminator of wins and loses for our model, but `diff_rating` is still on top.  
+
+
+```{r}
+# Misc Features
+features %>%
+  mutate(is_win = ifelse(is_win == 1,"Win","Loss")) %>%
+  pivot_longer(diff_avg_mp_bench:diff_game_score_metric, names_to = "stat", values_to = "value") %>%
+  ggplot(aes(is_win, value, color = is_win)) +
+  geom_boxplot(alpha = 0.4) +
+  facet_wrap(~stat, scales = "free_y", nrow = 3) +
+  labs(y = NULL, color = NULL, fill = NULL)
+```
+
+We can see clear differences in game outcome between `diff_game_score_metric` and `diff_paint_specialists` but less so in `diff_pnts_by_starters` and `diff_pnts_by_bench`.
+
+
+### Model Development
+
+#### Model Preparation: Workflow/Specification
+
+```{r}
+# Model Preparation ---------------------------
+
+# Create Splits (80-20)
+splits <- initial_split(
+  features,
+  prop = 0.8
+)
+
+# Create pre-processing recipe
+preprocessing_recipe <-
+  recipe(is_win ~ ., data = splits %>% training()) %>%
+  # Removes unnecessary columns
+  step_rm(season, nbagameid, gamedate, h_team, a_team) %>%
+  # Removes observations (rows of data) if they contain NA or NaN values
+  step_naomit(everything(), skip= TRUE) %>%
+  # Removes any numeric variables that have zero variance
+  step_zv(all_numeric(), -all_outcomes()) %>%
+  # Remove highly correlated variables
+  step_corr(all_numeric(), threshold = 0.8, method = "spearman") 
+
+# Observe the recipe on features
+features_proprocessed <- preprocessing_recipe %>%
+  prep() %>%
+  bake(splits %>% training())
+
+# Set Seed for reproducibility 
+set.seed(123)
+feature_folds <- vfold_cv(training(splits), strata = is_win, v = 5)
+
+# Create XGB boost classification model spec
+xgb_spec <- boost_tree(
+  mode = "classification",
+  trees = 500,
+  tree_depth = tune(), min_n = tune(),
+  loss_reduction = tune(),                     # first three: model complexity
+  sample_size = tune(), mtry = tune(),         # randomness
+  learn_rate = tune()                          # step size
+) %>%
+  set_engine("xgboost")
+
+# Display model specification
+xgb_spec
+
+# Create model workflow
+xgb_wf <- workflow() %>%
+  add_recipe(preprocessing_recipe) %>%
+  add_model(xgb_spec)
+```
+
+#### Tune and Train Model
+
+```{r}
+# Hyper-parameter tuning ---------------------------
+
+# Use anova race to tune the grid and save time on poor performing parameter combinations
+doParallel::registerDoParallel()
+
+set.seed(345)
+xgb_res <- tune_race_anova(
+  xgb_wf,
+  resamples = feature_folds,
+  grid = 30,
+  metrics = metric_set(roc_auc),
+  control = control_race(verbose_elim = TRUE,save_pred=TRUE)
+)
+
+# Plot the parameter combination race
+plot_race(xgb_res)
+
+```
+
+Using `tune_race_anova` we can eliminated combinations of parameters that are low performing and only use compute on parameter combinations that are high performing. We can see that only 3 parameter combinations made it to the 5th and final race stage.
+
+
+```{r}
+# Collect metrics for the model training 
+collect_metrics(xgb_res)
+
+# Show best combination of parameters
+show_best(xgb_res, metric = "roc_auc")
+```
+
+#### Refit & Evaluate Model
+
+```{r}
+# Refit best model on training data and assess performance on test set
+xgb_last <-
+  xgb_wf %>%
+  finalize_workflow(select_best(xgb_res,metric = "roc_auc")) %>%
+  last_fit(splits)
+
+# Show metrics
+collect_metrics(xgb_last)
+
+# Capture training predictions
+xgb_last_pred <- collect_predictions(xgb_last)
+
+# Display output
+xgb_last_pred
+```
+
+```{r}
+# Extract variable importance and plot
+xgb_fit <- extract_fit_parsnip(xgb_last)
+vip(xgb_fit, num_features = 15)
+```
+
+
+Plotting variable importance allows us to quantify how much a given feature in our model is explaining game outcome. In this case our `diff_rating` variable is explaining our predictor the most, however also Hollinger's game score metric and the maximum usage % player percentage on the team were also important variables. The cumulative number of lineups for the home and difference in points by starters between teams were less important but appear in the top 5 for variable importance in our model.
+
+
+
+```{r}
+# Evaluate ROC curve
+xgb_last %>%
+  collect_predictions() %>%
+  roc_curve(is_win, .pred_1) %>%
+  ggplot(aes(x = 1 - specificity, y = sensitivity)) +
+  geom_line(linewidth = 1.5, color = "midnightblue") +
+  geom_abline(
+    lty = 2, alpha = 0.5,
+    color = "gray50",
+    linewidth = 1.2
+  )
+```
+
+
+ROC curves allow us to assess the classification performance of our model i.e. how well we predict game outcomes (as wins). It uses a graphical representation of two variables, `sensitivity` (true positive rate) and `1- specificity` (false positive rate). We can see that our model was able to correctly identify when the predicted team will win and not too often incorrectly predicting a loss when the outcome was a win.
+
+
+
+### Playoff Simulation
+
+#### Run Simulations
+
+```{r}
+# 2024 Playoff Simulation ---------------------------
+
+# Set playoff seeding by conference and by league
+playoff_team_seeding
+
+# Set number of simulations
+nr_sims <- 1000
+
+# Run the sims and get time elapsed
+system.time(
+  sim_results <- playoff_sim(nr_sims, xgb_last, playoff_team_seeding)
+)
+
+# Set sim outputs to variables
+all_results <- sim_results$results
+all_final_series <- sim_results$final_series 
+
+# Show the number of simulations that resulted in each team being eliminated at a given stage
+results_extended <- 
+  all_final_series %>% 
+  group_by(round_made, team_name) %>% 
+  summarise(
+    total = n(),
+    .groups = 'drop'
+  ) %>% 
+  pivot_wider(
+    names_from = round_made,
+    values_from = c(total),
+    values_fill = 0
+  )
+
+# Display table
+results_extended
+
+```
+
+#### Visualise the path to NBA Finals
+
+```{r}
+# Visualise the playoff bracket simulations ---------------------------
+
+# Processing and summarising results
+results_proportion <- results_extended %>%
+  group_by(team_name) %>%
+  reframe(across(c(`1`, `2`, `3`, `4`, `5`), 
+                ~ .x / nr_sims,
+                .names = "Round {col}")) %>%
+  select(-`Round 5`) %>%
+  rename(
+     'Conference Finals' = `Round 3`,
+     'Finals' = `Round 4`,
+    ) %>%
+  arrange(desc(Finals), desc(`Conference Finals`))
+
+# Join the logo URLs with the main data frame
+results_proportion <- results_proportion %>%
+  left_join(logo_mapping, by = "team_name")
+
+# Create probabilities table for advancing rounds
+results_proportion %>%
+  select(-team_name) %>%
+  select(logo_url,`Round 1`:Finals) %>%
+  gt() %>%
+  tab_header(
+    title = "2023 NBA Playoff Simulations",
+    subtitle = "The % chance that a team wins that round*",
+  ) %>%
+  fmt_percent(
+    columns = c("Round 1", "Round 2", "Conference Finals", "Finals"),
+    decimals = 1
+  ) %>%
+  cols_label(
+    "logo_url" = "Team",
+    "Round 1" = "Rnd 1",
+    "Round 2" = "Rnd 2",
+    "Conference Finals" = "Conf. Finals",
+    "Finals" = "Finals",
+  ) %>%
+  tab_options(table.width = pct(50)) %>%
+  gt_img_rows(logo_url) %>%
+  tab_source_note("*The proportion of simulated playoff brackets where a team wins or advances on from that round.") %>%
+  gt_theme_538() %>%
+  tab_style(
+    style = cell_text(align = 'center'),
+    locations = cells_column_labels(columns = everything())
+  ) %>%
+  tab_style(
+    style = cell_text(align = 'center'),
+    locations = cells_body(columns = everything())
+  )
+```
+
+#### Series Predictions
+
+```{r}
+# 2024 Playoff Series predictor ---------------------------
+
+# Point estimate example
+get_series_prediction_2024("Finals","DAL","BOS", "Point Estimate")
+
+```
+
+```{r}
+# 2024 Playoff Series predictor ---------------------------
+
+# Probabilistic
+get_series_prediction_2024("Finals","DAL","BOS", "Probabilistic")
+
+```
+
+## Part 3 -- Finding Insights from Your Model
+
+Find two teams that had a competitive window of 2 or more consecutive seasons making the playoffs and that under performed your model’s expectations for them, losing series they were expected to win. Why do you think that happened? Classify one of them as bad luck and one of them as relating to a cause not currently accounted for in your model. If given more time and data, how would you use what you found to improve your model?
+
+```{r}
+# Find teams that made 23 and 24 season playoffs and that under performed in Simulated 2024 Playoffs
+p3_playoff_teams <- team_data %>%
+  filter((season >= 2022 | season <= 2023) & gametype == 4) %>%
+  distinct(off_team) %>%
+  rename("team_name" = "off_team")
+
+glimpse(p3_playoff_teams)
+
+```
+
+```{r}
+# Prediction for Knicks vs Indiana in Round 2 2024 Playoffs
+get_series_prediction_2024("Round 2","IND","NYK", "Probabilistic")
+```
+
+```{r}
+# Prediction for Denver vs Lakers in Round 2 2024 Playoffs
+get_series_prediction_2024("Round 1","DEN","LAL", "Point Estimate")
+
+```
+
+[**ANSWER :**]{style="color:red"}
+
+By assessing the simulation output for the 2024 NBA Playoffs it appears that despite making the playoffs two consecutive seasons in a row both the New York Knicks and Lakers under performed against my models expectations.
+
+The Knicks had more than a 50% chance of beating the Indiana Pacers to reach the Eastern Conference Finals when the series went to 5 and 7 games but ended up losing in 7 games to the Pacers. This particular example is a case of injuries affecting the outcome of the series. Despite the model predicting the Knicks had a better chance of winning the more games played in the series, 4 starting rotation players combined for only 3 games played due to injury. Without their expected, strongest playoff lineup the Knicks fell surprisingly at home in Game 7 to the Pacers. If given more data, specific metrics targeting starters minutes lost due to injuries not just missed games as well as other player health metrics, this might produce better predictions. given the injury history of a team before and during a playoff series.
+
+The Los Angeles Lakers had greater than 50% chance of beating the Denver Nuggets to reach Round 2 of the playoffs in the West but lost in 5 games. Despite the Denver Nuggets being the previous seasons champion, the model still favoured the Lakers due to the lack in decay in the ratings for team strength since their Finals win in the year of the COVID-19 NBA bubble. The Denver Nuggets were clear favourites in this series and the model does not fully account for this. To fix this limitation in the model, an adjustment to the input parameters to the Glicko-2 rating system model that would reduce the numbers of (lost) games before rating decay begins would would be sufficient.
