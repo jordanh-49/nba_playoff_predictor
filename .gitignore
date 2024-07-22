@@ -1,0 +1,15 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+data
+data_dictionary.txt
+
+playoffs_project.html
+
+xgb_last.rds
+
+test.html
+
+sim_results.rds
